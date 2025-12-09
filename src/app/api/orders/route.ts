@@ -12,12 +12,31 @@ export async function GET(request: Request) {
     const tenantId = searchParams.get('tenant_id')
     const startDate = searchParams.get('start_date')
     const endDate = searchParams.get('end_date')
+    const page = parseInt(searchParams.get('page') || '1')
+    const limit = parseInt(searchParams.get('limit') || '100') // Default 100, max reasonable
+    const search = searchParams.get('search')?.trim()
+    const paymentFilter = searchParams.get('payment_filter') // 'all' | 'paid' | 'due'
+    const paymentModeFilter = searchParams.get('payment_mode') // 'all' | 'cash' | 'card' | 'upi' | 'credit'
+    
     const supabase = await createClient()
     
+    // Optimize: Select only needed fields (reduce payload size)
     let query = supabase
       .from('bills')
       .select(`
-        *,
+        id,
+        invoice_number,
+        customer_name,
+        customer_phone,
+        subtotal,
+        gst_amount,
+        discount,
+        total_amount,
+        profit_amount,
+        paid_amount,
+        due_amount,
+        payment_mode,
+        created_at,
         branches:branch_id (
           id,
           name,
@@ -28,36 +47,19 @@ export async function GET(request: Request) {
           full_name,
           email
         )
-      `)
+      `, { count: 'exact' })
       .order('created_at', { ascending: false })
-    
-    // Ensure paid_amount and due_amount are included (defaults to 0 if NULL)
-    // These fields are calculated/updated by the payment system
-    
-    // Ensure profit_amount is included (it should be by default with *)
     
     // Tenant owners can see all branches' orders
     if (user.role === 'tenant_owner') {
       const finalTenantId = tenantId || user.tenant_id
       if (finalTenantId) {
-        // Get all branches for this tenant
-        const { data: branches } = await supabase
-          .from('branches')
-          .select('id')
-          .eq('tenant_id', finalTenantId)
-        
-        const branchIds = branches?.map(b => b.id) || []
-        if (branchIds.length > 0) {
-          if (branchId) {
-            // Filter by specific branch if provided
-            query = query.eq('branch_id', branchId)
-          } else {
-            // Show all branches
-            query = query.in('branch_id', branchIds)
-          }
+        if (branchId) {
+          // Filter by specific branch if provided
+          query = query.eq('branch_id', branchId)
         } else {
-          // No branches, return empty
-          query = query.eq('branch_id', 'no-branches')
+          // Optimize: Use tenant_id directly instead of fetching branches first
+          query = query.eq('tenant_id', finalTenantId)
         }
       }
     }
@@ -74,7 +76,29 @@ export async function GET(request: Request) {
       query = query.lte('created_at', endDate)
     }
     
-    const { data, error } = await query
+    // Search filter (invoice number, customer name, phone)
+    if (search) {
+      query = query.or(`invoice_number.ilike.%${search}%,customer_name.ilike.%${search}%,customer_phone.ilike.%${search}%`)
+    }
+    
+    // Payment status filter
+    if (paymentFilter === 'paid') {
+      query = query.eq('due_amount', 0)
+    } else if (paymentFilter === 'due') {
+      query = query.gt('due_amount', 0)
+    }
+    
+    // Payment mode filter
+    if (paymentModeFilter && paymentModeFilter !== 'all') {
+      query = query.eq('payment_mode', paymentModeFilter)
+    }
+    
+    // Apply pagination
+    const from = (page - 1) * limit
+    const to = from + limit - 1
+    query = query.range(from, to)
+    
+    const { data, error, count } = await query
     
     if (error) throw error
     
@@ -83,10 +107,18 @@ export async function GET(request: Request) {
       console.warn(`[PERF] GET /api/orders: ${duration}ms (target: <10ms)`)
     }
     
-    return NextResponse.json({ orders: data || [] }, {
+    return NextResponse.json({ 
+      orders: data || [],
+      pagination: {
+        page,
+        limit,
+        total: count || 0,
+        totalPages: Math.ceil((count || 0) / limit)
+      }
+    }, {
       headers: {
         'X-Response-Time': `${duration}ms`,
-        'Cache-Control': 'no-store, no-cache, must-revalidate',
+        'Cache-Control': 'public, s-maxage=10, stale-while-revalidate=30', // Cache for 10s, serve stale for 30s
       }
     })
   } catch (error: any) {

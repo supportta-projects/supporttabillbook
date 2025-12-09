@@ -116,16 +116,62 @@ export async function POST(request: Request) {
       .eq('tenant_id', branch.tenant_id)
       .single()
     
-    // Get products for purchase_price and stock validation
+    // Optimize: Fetch products and stock in parallel
     const productIds = body.items.map((item: any) => item.product_id)
-    const { data: products } = await supabase
-      .from('products')
-      .select('id, name, purchase_price, stock_tracking_type')
-      .in('id', productIds)
+    const [productsResult, stockResult] = await Promise.all([
+      supabase
+        .from('products')
+        .select('id, name, purchase_price, stock_tracking_type')
+        .in('id', productIds),
+      supabase
+        .from('current_stock')
+        .select('product_id, quantity')
+        .eq('branch_id', body.branch_id)
+        .in('product_id', productIds)
+    ])
     
-    const productsMap = new Map(products?.map(p => [p.id, p]) || [])
+    const products = productsResult.data || []
+    const stockItems = stockResult.data || []
+    const productsMap = new Map(products.map(p => [p.id, p]))
+    const stockMap = new Map(stockItems.map(s => [s.product_id, s]))
     
-    // Validate stock before creating bill
+    // Batch fetch serial numbers for all serial-tracked products
+    const serialProductIds = body.items
+      .filter((item: any) => {
+        const product = productsMap.get(item.product_id)
+        return product?.stock_tracking_type === 'serial' && item.serial_numbers && Array.isArray(item.serial_numbers)
+      })
+      .map((item: any) => item.product_id)
+    
+    let serialsMap = new Map()
+    if (serialProductIds.length > 0) {
+      // Get all serial numbers for these products in one query
+      const allSerials = body.items
+        .filter((item: any) => {
+          const product = productsMap.get(item.product_id)
+          return product?.stock_tracking_type === 'serial' && item.serial_numbers
+        })
+        .flatMap((item: any) => item.serial_numbers)
+      
+      if (allSerials.length > 0) {
+        const { data: serials } = await supabase
+          .from('product_serial_numbers')
+          .select('product_id, serial_number, status')
+          .eq('branch_id', body.branch_id)
+          .in('product_id', serialProductIds)
+          .in('serial_number', allSerials)
+        
+        // Group by product_id
+        serials?.forEach((s: any) => {
+          if (!serialsMap.has(s.product_id)) {
+            serialsMap.set(s.product_id, [])
+          }
+          serialsMap.get(s.product_id)?.push(s)
+        })
+      }
+    }
+    
+    // Validate stock before creating bill (using cached data)
     for (const item of body.items) {
       const product = productsMap.get(item.product_id)
       
@@ -138,36 +184,27 @@ export async function POST(request: Request) {
           )
         }
         
-        // Check if serials are available
-        const { data: serials } = await supabase
-          .from('product_serial_numbers')
-          .select('id, serial_number, status')
-          .eq('product_id', item.product_id)
-          .eq('branch_id', body.branch_id)
-          .in('serial_number', item.serial_numbers)
+        // Check serials from cached map
+        const productSerials = serialsMap.get(item.product_id) || []
+        const serialNumbers = productSerials.map((s: any) => s.serial_number)
         
-        if (!serials || serials.length !== item.serial_numbers.length) {
+        if (productSerials.length !== item.serial_numbers.length) {
           return NextResponse.json(
             { error: `Some serial numbers are not available for ${product.name}` },
             { status: 400 }
           )
         }
         
-        const unavailableSerials = serials.filter(s => s.status !== 'available')
+        const unavailableSerials = productSerials.filter((s: any) => s.status !== 'available')
         if (unavailableSerials.length > 0) {
           return NextResponse.json(
-            { error: `Some serial numbers are already sold: ${unavailableSerials.map(s => s.serial_number).join(', ')}` },
+            { error: `Some serial numbers are already sold: ${unavailableSerials.map((s: any) => s.serial_number).join(', ')}` },
             { status: 400 }
           )
         }
       } else {
-        // Quantity-based stock validation
-        const { data: stock } = await supabase
-          .from('current_stock')
-          .select('quantity')
-          .eq('branch_id', body.branch_id)
-          .eq('product_id', item.product_id)
-          .single()
+        // Quantity-based stock validation (using cached stock)
+        const stock = stockMap.get(item.product_id)
         
         if (!stock || stock.quantity < item.quantity) {
           return NextResponse.json(
@@ -271,7 +308,10 @@ export async function POST(request: Request) {
     
     if (billError) throw billError
     
-    // Create bill items and update stock
+    // Optimize: Prepare all stock updates in parallel
+    const ledgerEntries: Array<any> = []
+    
+    // Create bill items first
     const billItems = []
     for (const item of body.items) {
       const product = productsMap.get(item.product_id)
@@ -322,104 +362,111 @@ export async function POST(request: Request) {
       if (itemError) throw itemError
       billItems.push(billItem)
       
-      // Handle stock update based on tracking type
+      // Prepare ledger entries (stock updates will be done after)
       if (product?.stock_tracking_type === 'serial' && item.serial_numbers && Array.isArray(item.serial_numbers)) {
-        // Mark serial numbers as sold
-        await supabase
-          .from('product_serial_numbers')
-          .update({
-            status: 'sold',
-            bill_id: bill.id,
-            sold_at: new Date().toISOString(),
-          })
-          .eq('product_id', item.product_id)
-          .eq('branch_id', body.branch_id)
-          .in('serial_number', item.serial_numbers)
-        
-        // Update current_stock count
-        const { count: availableCount } = await supabase
-          .from('product_serial_numbers')
-          .select('*', { count: 'exact', head: true })
-          .eq('product_id', item.product_id)
-          .eq('branch_id', body.branch_id)
-          .eq('status', 'available')
-        
-        const newStockCount = availableCount || 0
-        
-        // Update or create current_stock record
-        const { data: currentStock } = await supabase
-          .from('current_stock')
-          .select('*')
-          .eq('branch_id', body.branch_id)
-          .eq('product_id', item.product_id)
-          .single()
-        
+        const currentStock = stockMap.get(item.product_id)
+        const previousStock = currentStock?.quantity || 0
+        ledgerEntries.push({
+          tenant_id: branch.tenant_id,
+          branch_id: body.branch_id,
+          product_id: item.product_id,
+          transaction_type: 'billing',
+          quantity: -item.quantity,
+          previous_stock: previousStock + item.quantity,
+          current_stock: previousStock,
+          reference_id: bill.id,
+          reason: `Billing - Invoice ${invoiceNumber}`,
+          created_by: user.id,
+        })
+      } else {
+        const currentStock = stockMap.get(item.product_id)
         if (currentStock) {
-          await supabase
-            .from('current_stock')
-            .update({ quantity: newStockCount })
-            .eq('id', currentStock.id)
-        } else {
-          await supabase
-            .from('current_stock')
-            .insert({
-              tenant_id: branch.tenant_id,
-              branch_id: body.branch_id,
-              product_id: item.product_id,
-              quantity: newStockCount,
-            })
-        }
-        
-        // Create ledger entry
-        await supabase
-          .from('stock_ledger')
-          .insert({
+          const newStock = currentStock.quantity - item.quantity
+          ledgerEntries.push({
             tenant_id: branch.tenant_id,
             branch_id: body.branch_id,
             product_id: item.product_id,
             transaction_type: 'billing',
             quantity: -item.quantity,
-            previous_stock: (currentStock?.quantity || 0) + item.quantity,
-            current_stock: newStockCount,
+            previous_stock: currentStock.quantity,
+            current_stock: newStock,
             reference_id: bill.id,
             reason: `Billing - Invoice ${invoiceNumber}`,
             created_by: user.id,
           })
-      } else {
-        // Quantity-based stock update
-        const { data: currentStock } = await supabase
-          .from('current_stock')
-          .select('*')
-          .eq('branch_id', body.branch_id)
-          .eq('product_id', item.product_id)
-          .single()
-        
-        if (currentStock) {
-          const newStock = currentStock.quantity - item.quantity
-          
-          // Create ledger entry
-          await supabase
-            .from('stock_ledger')
-            .insert({
-              tenant_id: branch.tenant_id,
-              branch_id: body.branch_id,
-              product_id: item.product_id,
-              transaction_type: 'billing',
-              quantity: -item.quantity,
-              previous_stock: currentStock.quantity,
-              current_stock: newStock,
-              reference_id: bill.id,
-              reason: `Billing - Invoice ${invoiceNumber}`,
-              created_by: user.id,
-            })
-          
-          // Update stock
-          await supabase
-            .from('current_stock')
-            .update({ quantity: newStock })
-            .eq('id', currentStock.id)
         }
       }
+    }
+    
+    // Execute stock updates in parallel batches
+    const stockUpdatePromises: Promise<any>[] = []
+    for (const item of body.items) {
+      const product = productsMap.get(item.product_id)
+      
+      if (product?.stock_tracking_type === 'serial' && item.serial_numbers && Array.isArray(item.serial_numbers)) {
+        // Mark serial numbers as sold
+        stockUpdatePromises.push(
+          (async () => {
+            await supabase
+              .from('product_serial_numbers')
+              .update({
+                status: 'sold',
+                bill_id: bill.id,
+                sold_at: new Date().toISOString(),
+              })
+              .eq('product_id', item.product_id)
+              .eq('branch_id', body.branch_id)
+              .in('serial_number', item.serial_numbers)
+            
+            // Update current_stock count
+            const { count } = await supabase
+              .from('product_serial_numbers')
+              .select('*', { count: 'exact', head: true })
+              .eq('product_id', item.product_id)
+              .eq('branch_id', body.branch_id)
+              .eq('status', 'available')
+            
+            const newStockCount = count || 0
+            const currentStock = stockMap.get(item.product_id)
+            if (currentStock && 'id' in currentStock) {
+              await supabase
+                .from('current_stock')
+                .update({ quantity: newStockCount })
+                .eq('id', (currentStock as any).id)
+            } else {
+              await supabase
+                .from('current_stock')
+                .insert({
+                  tenant_id: branch.tenant_id,
+                  branch_id: body.branch_id,
+                  product_id: item.product_id,
+                  quantity: newStockCount,
+                })
+            }
+          })()
+        )
+      } else {
+        const currentStock = stockMap.get(item.product_id)
+        if (currentStock && 'id' in currentStock) {
+          const newStock = currentStock.quantity - item.quantity
+          stockUpdatePromises.push(
+            (async () => {
+              await supabase
+                .from('current_stock')
+                .update({ quantity: newStock })
+                .eq('id', (currentStock as any).id)
+            })()
+          )
+        }
+      }
+    }
+    
+    // Execute all stock updates in parallel
+    await Promise.all(stockUpdatePromises)
+    
+    // Insert all ledger entries in batch
+    if (ledgerEntries.length > 0) {
+      await supabase.from('stock_ledger').insert(ledgerEntries)
     }
     
     const duration = Date.now() - startTime

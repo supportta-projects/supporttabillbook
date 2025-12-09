@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useEffect, useCallback } from 'react'
 import { useAuthStore } from '@/store/authStore'
 import { useBranchStore } from '@/store/branchStore'
 import { useOrders } from '@/hooks/useOrders'
@@ -40,10 +40,21 @@ export default function OrdersPage() {
   const { selectedBranchId } = useBranchStore()
   const tenantId = user?.tenant_id
   const [searchQuery, setSearchQuery] = useState('')
+  const [debouncedSearch, setDebouncedSearch] = useState('')
   const [dateFilter, setDateFilter] = useState<'today' | 'month' | 'all'>('today')
   const [paymentFilter, setPaymentFilter] = useState<'all' | 'paid' | 'due'>('all')
   const [paymentModeFilter, setPaymentModeFilter] = useState<'all' | 'cash' | 'card' | 'upi' | 'credit'>('all')
   const [currentPage, setCurrentPage] = useState(1)
+  
+  // Debounce search query
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedSearch(searchQuery)
+      setCurrentPage(1) // Reset to page 1 on search
+    }, 300) // 300ms debounce
+    
+    return () => clearTimeout(timer)
+  }, [searchQuery])
   
   // Fetch branches for branch selector
   const { data: branches } = useBranches(tenantId)
@@ -59,51 +70,30 @@ export default function OrdersPage() {
       startDate: dateFilter === 'today' ? todayStart.toISOString() : 
                  dateFilter === 'month' ? monthStart.toISOString() : undefined,
       endDate: dateFilter === 'today' ? now.toISOString() : undefined,
+      search: debouncedSearch || undefined,
+      paymentFilter,
+      paymentModeFilter,
+      page: currentPage,
+      limit: ITEMS_PER_PAGE,
     }
-  }, [dateFilter])
+  }, [dateFilter, debouncedSearch, paymentFilter, paymentModeFilter, currentPage])
   
-  // Fetch orders with branch filter
-  const { data: orders, isLoading, error, refetch } = useOrders(
+  // Fetch orders with server-side filtering and pagination
+  const { data: ordersData, isLoading, error, refetch } = useOrders(
     tenantId,
-    selectedBranchId || undefined, // Filter by selected branch
+    selectedBranchId || undefined,
     filters
   )
 
-  // Filter orders by search, payment status, and payment mode
-  const filteredOrders = useMemo(() => {
-    if (!orders) return []
-    
-    return orders.filter(order => {
-      // Search filter
-      const matchesSearch = 
-        !searchQuery ||
-        order.invoice_number?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.customer_name?.toLowerCase().includes(searchQuery.toLowerCase()) ||
-        order.customer_phone?.includes(searchQuery)
-      
-      // Payment status filter
-      const orderWithExtras = order as any
-      const dueAmount = orderWithExtras.due_amount || 0
-      const matchesPaymentStatus = 
-        paymentFilter === 'all' ||
-        (paymentFilter === 'paid' && dueAmount <= 0) ||
-        (paymentFilter === 'due' && dueAmount > 0)
-      
-      // Payment mode filter
-      const matchesPaymentMode = 
-        paymentModeFilter === 'all' ||
-        order.payment_mode === paymentModeFilter
-      
-      return matchesSearch && matchesPaymentStatus && matchesPaymentMode
-    })
-  }, [orders, searchQuery, paymentFilter, paymentModeFilter])
+  const orders = ordersData?.orders || []
+  const pagination = ordersData?.pagination || { page: 1, limit: ITEMS_PER_PAGE, total: 0, totalPages: 0 }
 
-  // Calculate stats
+  // Calculate stats from current page data (or fetch separately for accurate totals)
   const stats = useMemo(() => {
-    const totalSales = filteredOrders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
-    const totalProfit = filteredOrders.reduce((sum, order) => sum + Number((order as any).profit_amount || 0), 0)
-    const totalDue = filteredOrders.reduce((sum, order) => sum + Number((order as any).due_amount || 0), 0)
-    const dueOrdersCount = filteredOrders.filter(order => {
+    const totalSales = orders.reduce((sum, order) => sum + Number(order.total_amount || 0), 0)
+    const totalProfit = orders.reduce((sum, order) => sum + Number((order as any).profit_amount || 0), 0)
+    const totalDue = orders.reduce((sum, order) => sum + Number((order as any).due_amount || 0), 0)
+    const dueOrdersCount = orders.filter(order => {
       const dueAmount = (order as any).due_amount || 0
       return dueAmount > 0
     }).length
@@ -113,21 +103,16 @@ export default function OrdersPage() {
       totalProfit,
       totalDue,
       dueOrdersCount,
-      totalOrders: filteredOrders.length,
+      totalOrders: pagination.total || orders.length,
     }
-  }, [filteredOrders])
+  }, [orders, pagination.total])
 
-  // Pagination
-  const totalPages = Math.ceil(filteredOrders.length / ITEMS_PER_PAGE)
-  const paginatedOrders = useMemo(() => {
-    const startIndex = (currentPage - 1) * ITEMS_PER_PAGE
-    return filteredOrders.slice(startIndex, startIndex + ITEMS_PER_PAGE)
-  }, [filteredOrders, currentPage])
-
-  // Reset to page 1 when filters change
-  useMemo(() => {
-    setCurrentPage(1)
-  }, [searchQuery, paymentFilter, paymentModeFilter, dateFilter, selectedBranchId])
+  // Reset to page 1 when filters change (except page itself)
+  useEffect(() => {
+    if (currentPage !== 1) {
+      setCurrentPage(1)
+    }
+  }, [debouncedSearch, paymentFilter, paymentModeFilter, dateFilter, selectedBranchId])
 
   if (!tenantId) {
     return (
@@ -280,13 +265,13 @@ export default function OrdersPage() {
             <Button onClick={() => refetch()}>Retry</Button>
           </CardContent>
         </Card>
-      ) : filteredOrders.length === 0 ? (
+      ) : orders.length === 0 ? (
         <Card>
           <CardContent className="p-12 text-center">
             <Receipt className="h-16 w-16 mx-auto text-gray-400 mb-4" />
             <h3 className="text-xl font-semibold mb-2">No orders found</h3>
             <p className="text-gray-600 mb-4">
-              {searchQuery || paymentFilter !== 'all' || paymentModeFilter !== 'all'
+              {debouncedSearch || paymentFilter !== 'all' || paymentModeFilter !== 'all'
                 ? 'Try adjusting your filters'
                 : 'No orders have been created yet'}
             </p>
@@ -330,7 +315,7 @@ export default function OrdersPage() {
                     </tr>
                   </thead>
                   <tbody className="bg-white divide-y divide-gray-200">
-                    {paginatedOrders.map((order) => {
+                    {orders.map((order) => {
                       const orderWithExtras = order as any
                       const dueAmount = orderWithExtras.due_amount || 0
                       const isFullyPaid = dueAmount <= 0
@@ -466,31 +451,31 @@ export default function OrdersPage() {
           </Card>
           
           {/* Pagination */}
-          {totalPages > 1 && (
+          {pagination.totalPages > 1 && (
             <Card className="mt-4">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <div className="text-sm text-gray-600">
-                    Showing {(currentPage - 1) * ITEMS_PER_PAGE + 1} to {Math.min(currentPage * ITEMS_PER_PAGE, filteredOrders.length)} of {filteredOrders.length} orders
+                    Showing {(pagination.page - 1) * pagination.limit + 1} to {Math.min(pagination.page * pagination.limit, pagination.total)} of {pagination.total} orders
                   </div>
                   <div className="flex items-center gap-2">
                     <Button
                       variant="outline"
                       size="sm"
                       onClick={() => setCurrentPage(prev => Math.max(1, prev - 1))}
-                      disabled={currentPage === 1}
+                      disabled={pagination.page === 1 || isLoading}
                     >
                       <ChevronLeft className="h-4 w-4" />
                       Previous
                     </Button>
                     <div className="text-sm text-gray-600">
-                      Page {currentPage} of {totalPages}
+                      Page {pagination.page} of {pagination.totalPages}
                     </div>
                     <Button
                       variant="outline"
                       size="sm"
-                      onClick={() => setCurrentPage(prev => Math.min(totalPages, prev + 1))}
-                      disabled={currentPage === totalPages}
+                      onClick={() => setCurrentPage(prev => Math.min(pagination.totalPages, prev + 1))}
+                      disabled={pagination.page === pagination.totalPages || isLoading}
                     >
                       Next
                       <ChevronRight className="h-4 w-4" />
