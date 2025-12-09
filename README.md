@@ -63,6 +63,28 @@ This is a SaaS application designed for managing billing and stock across multip
 - **Authentication**: Supabase Auth
 - **Deployment**: Vercel (recommended)
 
+## Deployment
+
+### Quick Deploy to Vercel
+
+1. **Push your code to Git** (GitHub, GitLab, or Bitbucket)
+
+2. **Import to Vercel**:
+   - Go to [vercel.com](https://vercel.com)
+   - Click "Add New Project"
+   - Import your repository
+
+3. **Configure Environment Variables** in Vercel Dashboard:
+   ```
+   NEXT_PUBLIC_SUPABASE_URL=your-supabase-url
+   NEXT_PUBLIC_SUPABASE_ANON_KEY=your-anon-key
+   SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+   ```
+
+4. **Deploy!** Vercel will automatically build and deploy your app.
+
+📖 **For detailed deployment instructions**, see the [Vercel Deployment Guide](./docs/deployment/vercel.md).
+
 ## Project Structure
 
 ```
