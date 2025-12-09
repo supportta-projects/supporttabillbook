@@ -5,13 +5,30 @@ import Link from 'next/link'
 import Header from './Header'
 import Navigation from './Navigation'
 import { useAuthStore } from '@/store/authStore'
+import { useCurrentUser } from '@/hooks/useAuth'
+import { Loader2 } from 'lucide-react'
 
 interface AppLayoutProps {
   children: ReactNode
 }
 
 export default function AppLayout({ children }: AppLayoutProps) {
-  const { user, isAuthenticated } = useAuthStore()
+  const { user, isAuthenticated, isLoading } = useAuthStore()
+  
+  // Fetch user if not loaded
+  const { isLoading: userLoading } = useCurrentUser()
+
+  // Show loading state while checking auth
+  if (isLoading || userLoading) {
+    return (
+      <div className="flex min-h-screen items-center justify-center">
+        <div className="text-center">
+          <Loader2 className="h-8 w-8 animate-spin text-blue-600 mx-auto mb-4" />
+          <p className="text-gray-600">Loading...</p>
+        </div>
+      </div>
+    )
+  }
 
   // Don't show layout on login pages or when not authenticated
   if (!isAuthenticated || !user) {

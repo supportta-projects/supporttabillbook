@@ -6,17 +6,28 @@ export function useBrands(tenantId?: string) {
   return useQuery({
     queryKey: ['brands', tenantId],
     queryFn: async () => {
-      const response = await fetch('/api/brands')
+      const startTime = performance.now()
+      const response = await fetch('/api/brands', {
+        credentials: 'include',
+        cache: 'no-store',
+      })
       if (!response.ok) {
         const error = await response.json()
         throw new Error(error.error || 'Failed to fetch brands')
       }
       const data = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Brands fetch took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
       return data.brands as Brand[]
     },
     enabled: !!tenantId,
     staleTime: 5 * 60 * 1000, // Cache for 5 minutes
     gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   })
 }
 

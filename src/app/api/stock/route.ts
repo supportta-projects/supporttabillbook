@@ -188,11 +188,14 @@ export async function GET(request: Request) {
     })
     
     const duration = Date.now() - startTime
-    console.log(`[PERF] GET /api/stock: ${duration}ms`)
+    if (duration > 10) {
+      console.warn(`[PERF] GET /api/stock: ${duration}ms (target: <10ms)`)
+    }
     
     return NextResponse.json({ stock: stockWithProducts }, {
       headers: {
-        'X-Response-Time': `${duration}ms`
+        'X-Response-Time': `${duration}ms`,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       }
     })
   } catch (error: any) {

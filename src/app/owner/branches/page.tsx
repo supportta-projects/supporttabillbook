@@ -194,6 +194,11 @@ export default function BranchesListPage() {
                           Inactive
                         </span>
                       )}
+                      {branch.is_main && (
+                        <span className="px-2 py-1 rounded-full text-xs font-semibold bg-yellow-100 text-yellow-800 flex items-center gap-1">
+                          Main Branch
+                        </span>
+                      )}
                       <span className="px-2 py-1 rounded-full text-xs font-mono font-semibold bg-blue-100 text-blue-800">
                         {branch.code}
                       </span>
@@ -234,10 +239,12 @@ export default function BranchesListPage() {
                     variant="destructive"
                     size="sm"
                     className="gap-2"
+                    disabled={branch.is_main}
                     onClick={() => {
                       setBranchToDelete({ id: branch.id, name: branch.name })
                       setDeleteDialogOpen(true)
                     }}
+                    title={branch.is_main ? 'Cannot delete main branch. Set another branch as main first.' : 'Delete branch'}
                   >
                     <Trash2 className="h-4 w-4" />
                   </Button>

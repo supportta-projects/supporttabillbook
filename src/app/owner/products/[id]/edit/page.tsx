@@ -1,0 +1,769 @@
+'use client'
+
+import { useState, useEffect } from 'react'
+import { useRouter, useParams } from 'next/navigation'
+import { useForm } from 'react-hook-form'
+import { zodResolver } from '@hookform/resolvers/zod'
+import * as z from 'zod'
+import { useAuthStore } from '@/store/authStore'
+import { useProduct, useUpdateProduct } from '@/hooks/useProducts'
+import { useCategories } from '@/hooks/useCategories'
+import { useBrands } from '@/hooks/useBrands'
+import { useBranches } from '@/hooks/useBranches'
+import { useStockIn } from '@/hooks/useStock'
+import { useAddSerialNumbers } from '@/hooks/useSerialNumbers'
+import PageContainer from '@/components/layout/PageContainer'
+import { Button } from '@/components/ui/button-shadcn'
+import { Input } from '@/components/ui/input-shadcn'
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import {
+  Form,
+  FormControl,
+  FormField,
+  FormItem,
+  FormLabel,
+  FormMessage,
+  FormDescription,
+} from '@/components/ui/form'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { Textarea } from '@/components/ui/textarea'
+import { ArrowLeft, Package, Tag, Boxes, Hash, TrendingUp, Plus, X } from 'lucide-react'
+import { toast } from 'sonner'
+import Link from 'next/link'
+import { Separator } from '@/components/ui/separator'
+
+const productSchema = z.object({
+  name: z.string().min(1, 'Product name is required').max(255, 'Name is too long'),
+  sku: z.string().optional(),
+  category_id: z.string().optional(),
+  brand_id: z.string().optional(),
+  unit: z.string().min(1, 'Unit is required'),
+  selling_price: z.number().min(0.01, 'Selling price must be greater than 0'),
+  purchase_price: z.number().min(0).optional().or(z.literal('')),
+  min_stock: z.number().min(0).optional().or(z.literal('')),
+  description: z.string().optional(),
+  stock_tracking_type: z.enum(['quantity', 'serial']),
+  is_active: z.boolean(),
+})
+
+type ProductFormValues = z.infer<typeof productSchema>
+
+const UNITS = [
+  'Pieces',
+  'Kg',
+  'Grams',
+  'Liters',
+  'ML',
+  'Box',
+  'Pack',
+  'Dozen',
+  'Meters',
+  'Feet',
+  'Sq. Feet',
+  'Sq. Meters',
+]
+
+export default function EditProductPage() {
+  const router = useRouter()
+  const params = useParams()
+  const productId = params.id as string
+  const { user } = useAuthStore()
+  const tenantId = user?.tenant_id
+  const updateProduct = useUpdateProduct()
+  const { data: product, isLoading: productLoading } = useProduct(productId)
+  const { data: categories, isLoading: categoriesLoading } = useCategories(tenantId)
+  const { data: brands, isLoading: brandsLoading } = useBrands(tenantId)
+  const { data: branches, isLoading: branchesLoading } = useBranches(tenantId)
+  const stockIn = useStockIn()
+  const addSerialNumbers = useAddSerialNumbers()
+  
+  // Stock entry state
+  const [selectedBranchId, setSelectedBranchId] = useState<string>('')
+  const [initialQuantity, setInitialQuantity] = useState<string>('')
+  const [serialNumbers, setSerialNumbers] = useState<string[]>([''])
+  const [addStockOnUpdate, setAddStockOnUpdate] = useState(false)
+  
+  // Set default branch to main branch
+  useEffect(() => {
+    if (branches && branches.length > 0 && !selectedBranchId) {
+      const mainBranch = branches.find(b => b.is_main && b.is_active)
+      if (mainBranch) {
+        setSelectedBranchId(mainBranch.id)
+      } else {
+        // If no main branch, use first active branch
+        const firstActiveBranch = branches.find(b => b.is_active)
+        if (firstActiveBranch) {
+          setSelectedBranchId(firstActiveBranch.id)
+        }
+      }
+    }
+  }, [branches, selectedBranchId])
+
+  const form = useForm<ProductFormValues>({
+    resolver: zodResolver(productSchema),
+    defaultValues: {
+      name: '',
+      sku: '',
+      category_id: '',
+      brand_id: '',
+      unit: 'Pieces',
+      selling_price: 0,
+      purchase_price: '',
+      min_stock: '',
+      description: '',
+      stock_tracking_type: 'quantity',
+      is_active: true,
+    },
+  })
+
+  useEffect(() => {
+    if (product) {
+      form.reset({
+        name: product.name,
+        sku: product.sku || '',
+        category_id: product.category_id || '',
+        brand_id: product.brand_id || '',
+        unit: product.unit,
+        selling_price: product.selling_price,
+        purchase_price: product.purchase_price || '',
+        min_stock: product.min_stock || '',
+        description: product.description || '',
+        stock_tracking_type: product.stock_tracking_type || 'quantity',
+        is_active: product.is_active ?? true,
+      })
+    }
+  }, [product, form])
+
+  const addSerialNumberField = () => {
+    setSerialNumbers([...serialNumbers, ''])
+  }
+
+  const removeSerialNumberField = (index: number) => {
+    setSerialNumbers(serialNumbers.filter((_, i) => i !== index))
+  }
+
+  const updateSerialNumber = (index: number, value: string) => {
+    const updated = [...serialNumbers]
+    updated[index] = value
+    setSerialNumbers(updated)
+  }
+
+  const onSubmit = async (data: ProductFormValues) => {
+    if (!tenantId) {
+      toast.error('No tenant assigned. Please contact your administrator.')
+      return
+    }
+
+    try {
+      await updateProduct.mutateAsync({
+        id: productId,
+        name: data.name.trim(),
+        sku: data.sku?.trim() || undefined,
+        category_id: data.category_id || undefined,
+        brand_id: data.brand_id || undefined,
+        unit: data.unit.trim(),
+        selling_price: data.selling_price,
+        purchase_price: typeof data.purchase_price === 'number' ? data.purchase_price : undefined,
+        min_stock: typeof data.min_stock === 'number' ? data.min_stock : 0,
+        description: data.description?.trim() || undefined,
+        stock_tracking_type: data.stock_tracking_type,
+        is_active: data.is_active,
+      })
+      
+      // Add stock if requested
+      if (addStockOnUpdate && selectedBranchId) {
+        if (data.stock_tracking_type === 'quantity') {
+          // Add quantity-based stock
+          if (initialQuantity && parseInt(initialQuantity) > 0) {
+            try {
+              await stockIn.mutateAsync({
+                branch_id: selectedBranchId,
+                product_id: productId,
+                quantity: parseInt(initialQuantity),
+                reason: 'Stock entry after product update',
+              })
+              toast.success(`Product updated and ${initialQuantity} units added to stock!`)
+            } catch (stockError: any) {
+              toast.error(`Product updated but failed to add stock: ${stockError.message}`)
+            }
+          }
+        } else if (data.stock_tracking_type === 'serial') {
+          // Add serial numbers
+          const validSerials = serialNumbers.filter(s => s.trim() !== '')
+          if (validSerials.length > 0) {
+            try {
+              await addSerialNumbers.mutateAsync({
+                productId: productId,
+                branchId: selectedBranchId,
+                serialNumbers: validSerials,
+              })
+              toast.success(`Product updated and ${validSerials.length} serial number(s) added!`)
+            } catch (serialError: any) {
+              toast.error(`Product updated but failed to add serial numbers: ${serialError.message}`)
+            }
+          }
+        }
+      }
+      
+      if (!addStockOnUpdate || (data.stock_tracking_type === 'quantity' && !initialQuantity) || (data.stock_tracking_type === 'serial' && serialNumbers.filter(s => s.trim() !== '').length === 0)) {
+        toast.success(`Product "${data.name}" updated successfully!`)
+      }
+      
+      router.push('/owner/products')
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to update product')
+    }
+  }
+
+  if (productLoading) {
+    return (
+      <PageContainer title="Edit Product">
+        <Card>
+          <CardContent className="p-12 text-center">
+            <div className="text-gray-500">Loading product information...</div>
+          </CardContent>
+        </Card>
+      </PageContainer>
+    )
+  }
+
+  if (!product) {
+    return (
+      <PageContainer title="Edit Product">
+        <Card>
+          <CardContent className="p-6">
+            <p className="text-red-600">Product not found</p>
+            <Link href="/owner/products">
+              <Button className="mt-4">Back to Products</Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </PageContainer>
+    )
+  }
+
+  return (
+    <PageContainer
+      title="Edit Product"
+      description="Update product information"
+    >
+      <div className="max-w-4xl">
+        <Link href="/owner/products">
+          <Button variant="ghost" className="mb-4 gap-2">
+            <ArrowLeft className="h-4 w-4" />
+            Back to Products
+          </Button>
+        </Link>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <Package className="h-5 w-5 text-blue-600" />
+              Product Information
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Form {...form}>
+              <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+                {/* Basic Information */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Package className="h-5 w-5" />
+                    Basic Information
+                  </h3>
+                  
+                  <FormField
+                    control={form.control}
+                    name="name"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-lg font-semibold">
+                          Product Name <span className="text-red-500">*</span>
+                        </FormLabel>
+                        <FormControl>
+                          <Input
+                            className="h-12 text-lg"
+                            placeholder="e.g., Samsung Galaxy S23"
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="sku"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">SKU (Stock Keeping Unit)</FormLabel>
+                          <FormControl>
+                            <Input
+                              className="h-12 text-lg font-mono"
+                              placeholder="e.g., SAM-GAL-S23-128"
+                              {...field}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Unique identifier for this product
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="unit"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">
+                            Unit <span className="text-red-500">*</span>
+                          </FormLabel>
+                          <Select onValueChange={field.onChange} value={field.value}>
+                            <FormControl>
+                              <SelectTrigger className="h-12 text-lg">
+                                <SelectValue placeholder="Select unit" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              {UNITS.map((unit) => (
+                                <SelectItem key={unit} value={unit}>
+                                  {unit}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Catalogue Information */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Tag className="h-5 w-5" />
+                    Catalogue Information
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="category_id"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">Category</FormLabel>
+                          <Select 
+                            onValueChange={(value) => field.onChange(value === 'none' ? '' : value)} 
+                            value={field.value || 'none'}
+                            disabled={categoriesLoading}
+                          >
+                            <FormControl>
+                              <SelectTrigger className="h-12 text-lg">
+                                <SelectValue placeholder="Select category (optional)" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="none">No Category</SelectItem>
+                              {categories?.filter(c => c.is_active).map((category) => (
+                                <SelectItem key={category.id} value={category.id}>
+                                  {category.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            Organize products by category
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="brand_id"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">Brand</FormLabel>
+                          <Select 
+                            onValueChange={(value) => field.onChange(value === 'none' ? '' : value)} 
+                            value={field.value || 'none'}
+                            disabled={brandsLoading}
+                          >
+                            <FormControl>
+                              <SelectTrigger className="h-12 text-lg">
+                                <SelectValue placeholder="Select brand (optional)" />
+                              </SelectTrigger>
+                            </FormControl>
+                            <SelectContent>
+                              <SelectItem value="none">No Brand</SelectItem>
+                              {brands?.filter(b => b.is_active).map((brand) => (
+                                <SelectItem key={brand.id} value={brand.id}>
+                                  {brand.name}
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                          <FormDescription>
+                            Product brand or manufacturer
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Pricing Information */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <TrendingUp className="h-5 w-5" />
+                    Pricing Information
+                  </h3>
+                  
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="selling_price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">
+                            Selling Price <span className="text-red-500">*</span>
+                          </FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              className="h-12 text-lg"
+                              placeholder="0.00"
+                              {...field}
+                              onChange={(e) => field.onChange(parseFloat(e.target.value) || 0)}
+                            />
+                          </FormControl>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+
+                    <FormField
+                      control={form.control}
+                      name="purchase_price"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">Purchase Price</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              step="0.01"
+                              className="h-12 text-lg"
+                              placeholder="0.00"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value ? parseFloat(e.target.value) : '')}
+                              value={field.value === '' ? '' : field.value}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Cost price for profit calculation
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <FormField
+                      control={form.control}
+                      name="min_stock"
+                      render={({ field }) => (
+                        <FormItem>
+                          <FormLabel className="text-lg font-semibold">Minimum Stock</FormLabel>
+                          <FormControl>
+                            <Input
+                              type="number"
+                              className="h-12 text-lg"
+                              placeholder="0"
+                              {...field}
+                              onChange={(e) => field.onChange(e.target.value ? parseInt(e.target.value) : '')}
+                              value={field.value === '' ? '' : field.value}
+                            />
+                          </FormControl>
+                          <FormDescription>
+                            Alert when stock falls below this level
+                          </FormDescription>
+                          <FormMessage />
+                        </FormItem>
+                      )}
+                    />
+                  </div>
+                </div>
+
+                <Separator />
+
+                {/* Stock Tracking */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold flex items-center gap-2">
+                    <Hash className="h-5 w-5" />
+                    Stock Tracking
+                  </h3>
+                  
+                  <FormField
+                    control={form.control}
+                    name="stock_tracking_type"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-lg font-semibold">
+                          Stock Tracking Type <span className="text-red-500">*</span>
+                        </FormLabel>
+                        <Select onValueChange={field.onChange} value={field.value}>
+                          <FormControl>
+                            <SelectTrigger className="h-12 text-lg">
+                              <SelectValue placeholder="Select tracking type" />
+                            </SelectTrigger>
+                          </FormControl>
+                          <SelectContent>
+                            <SelectItem value="quantity">
+                              <div className="flex items-center gap-2">
+                                <Package className="h-4 w-4 text-blue-600" />
+                                <span>Quantity (Count) - Track by total quantity</span>
+                              </div>
+                            </SelectItem>
+                            <SelectItem value="serial">
+                              <div className="flex items-center gap-2">
+                                <Hash className="h-4 w-4 text-purple-600" />
+                                <span>Serial Numbers - Track individual serial numbers</span>
+                              </div>
+                            </SelectItem>
+                          </SelectContent>
+                        </Select>
+                        <FormDescription>
+                          Choose how to track inventory for this product. Quantity tracks total count, Serial Numbers tracks each item individually.
+                        </FormDescription>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <Separator />
+
+                {/* Add Stock Entry */}
+                <div className="space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold flex items-center gap-2">
+                      <TrendingUp className="h-5 w-5" />
+                      Add Stock (Optional)
+                    </h3>
+                    <div className="flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        id="addStock"
+                        checked={addStockOnUpdate}
+                        onChange={(e) => setAddStockOnUpdate(e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300"
+                      />
+                      <label htmlFor="addStock" className="text-sm font-medium cursor-pointer">
+                        Add stock now
+                      </label>
+                    </div>
+                  </div>
+
+                  {addStockOnUpdate && (
+                    <div className="space-y-4 p-4 border rounded-lg bg-gray-50">
+                      {/* Branch Selection */}
+                      <div>
+                        <label className="text-sm font-semibold mb-2 block">
+                          Branch <span className="text-red-500">*</span>
+                        </label>
+                        <Select
+                          value={selectedBranchId}
+                          onValueChange={setSelectedBranchId}
+                          disabled={branchesLoading}
+                        >
+                          <SelectTrigger className="h-12 text-lg">
+                            <SelectValue placeholder="Select branch" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {branches?.filter(b => b.is_active).map((branch) => (
+                              <SelectItem key={branch.id} value={branch.id}>
+                                <div className="flex items-center gap-2">
+                                  <span>{branch.name} ({branch.code})</span>
+                                  {branch.is_main && (
+                                    <span className="text-xs bg-yellow-100 text-yellow-800 px-2 py-0.5 rounded">Main</span>
+                                  )}
+                                </div>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {branches?.find(b => b.id === selectedBranchId)?.is_main && (
+                          <p className="text-xs text-gray-500 mt-1">
+                            Main branch selected (default)
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Quantity-based stock entry */}
+                      {form.watch('stock_tracking_type') === 'quantity' && (
+                        <div>
+                          <label className="text-sm font-semibold mb-2 block">
+                            Quantity to Add <span className="text-red-500">*</span>
+                          </label>
+                          <Input
+                            type="number"
+                            min="0"
+                            className="h-12 text-lg"
+                            placeholder="Enter quantity to add"
+                            value={initialQuantity}
+                            onChange={(e) => setInitialQuantity(e.target.value)}
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            Enter the number of units to add to stock
+                          </p>
+                        </div>
+                      )}
+
+                      {/* Serial number-based stock entry */}
+                      {form.watch('stock_tracking_type') === 'serial' && (
+                        <div>
+                          <label className="text-sm font-semibold mb-2 block">
+                            Serial Numbers <span className="text-red-500">*</span>
+                          </label>
+                          <div className="space-y-2">
+                            {serialNumbers.map((serial, index) => (
+                              <div key={index} className="flex gap-2">
+                                <Input
+                                  className="h-12 text-lg"
+                                  placeholder={`Serial number ${index + 1}`}
+                                  value={serial}
+                                  onChange={(e) => updateSerialNumber(index, e.target.value)}
+                                />
+                                {serialNumbers.length > 1 && (
+                                  <Button
+                                    type="button"
+                                    variant="outline"
+                                    size="icon"
+                                    className="h-12 w-12"
+                                    onClick={() => removeSerialNumberField(index)}
+                                  >
+                                    <X className="h-4 w-4" />
+                                  </Button>
+                                )}
+                              </div>
+                            ))}
+                            <Button
+                              type="button"
+                              variant="outline"
+                              className="w-full"
+                              onClick={addSerialNumberField}
+                            >
+                              <Plus className="h-4 w-4 mr-2" />
+                              Add Another Serial Number
+                            </Button>
+                          </div>
+                          <p className="text-xs text-gray-500 mt-1">
+                            Enter individual serial numbers for each item
+                          </p>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+
+                <Separator />
+
+                {/* Additional Information */}
+                <div className="space-y-4">
+                  <h3 className="text-lg font-semibold">Additional Information</h3>
+                  
+                  <FormField
+                    control={form.control}
+                    name="description"
+                    render={({ field }) => (
+                      <FormItem>
+                        <FormLabel className="text-lg font-semibold">Description</FormLabel>
+                        <FormControl>
+                          <Textarea
+                            className="text-lg"
+                            placeholder="Product description, features, specifications..."
+                            rows={4}
+                            {...field}
+                          />
+                        </FormControl>
+                        <FormMessage />
+                      </FormItem>
+                    )}
+                  />
+
+                  <FormField
+                    control={form.control}
+                    name="is_active"
+                    render={({ field }) => (
+                      <FormItem className="flex items-center justify-between p-4 border rounded-lg">
+                        <div className="space-y-0.5">
+                          <FormLabel className="text-lg font-semibold">
+                            Product Status
+                          </FormLabel>
+                          <FormDescription>
+                            Active products are visible in billing and stock management
+                          </FormDescription>
+                        </div>
+                        <FormControl>
+                          <select
+                            value={field.value ? 'true' : 'false'}
+                            onChange={(e) => field.onChange(e.target.value === 'true')}
+                            className="px-3 py-2 border rounded-md"
+                          >
+                            <option value="true">Active</option>
+                            <option value="false">Inactive</option>
+                          </select>
+                        </FormControl>
+                      </FormItem>
+                    )}
+                  />
+                </div>
+
+                <div className="flex gap-4 pt-4">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="lg"
+                    className="flex-1"
+                    onClick={() => router.back()}
+                    disabled={updateProduct.isPending}
+                  >
+                    Cancel
+                  </Button>
+                  <Button
+                    type="submit"
+                    size="lg"
+                    className="flex-1"
+                    disabled={updateProduct.isPending}
+                  >
+                    {updateProduct.isPending ? 'Updating...' : 'Update Product'}
+                  </Button>
+                </div>
+              </form>
+            </Form>
+          </CardContent>
+        </Card>
+      </div>
+    </PageContainer>
+  )
+}
+

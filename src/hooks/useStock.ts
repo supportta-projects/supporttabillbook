@@ -5,6 +5,7 @@ export function useCurrentStock(branchId?: string, tenantId?: string) {
   return useQuery({
     queryKey: ['stock', branchId, tenantId],
     queryFn: async () => {
+      const startTime = performance.now()
       let url = '/api/stock'
       const params = new URLSearchParams()
       if (branchId) params.append('branch_id', branchId)
@@ -13,6 +14,7 @@ export function useCurrentStock(branchId?: string, tenantId?: string) {
       
       const response = await fetch(url, {
         credentials: 'include',
+        cache: 'no-store', // Always fetch fresh data
       })
       
       if (!response.ok) {
@@ -27,17 +29,18 @@ export function useCurrentStock(branchId?: string, tenantId?: string) {
         throw new Error(error.error || 'Failed to fetch stock')
       }
       const data = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Stock fetch took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
       return data.stock as CurrentStock[]
     },
     enabled: !!branchId || !!tenantId,
-    staleTime: 30 * 1000,
-    gcTime: 2 * 60 * 1000,
-    retry: (failureCount, error: any) => {
-      if (error?.message?.includes('session has expired') || error?.message?.includes('Unauthorized')) {
-        return false
-      }
-      return failureCount < 2
-    },
+    staleTime: 10 * 1000, // Reduced cache time for faster updates
+    gcTime: 30 * 1000, // Reduced garbage collection time
+    refetchOnWindowFocus: false, // Don't refetch on window focus
+    retry: 1, // Reduce retries
+    retryDelay: 100, // Faster retry
   })
 }
 
@@ -72,9 +75,11 @@ export function useStockIn() {
       reason?: string
       reference_id?: string
     }) => {
+      const startTime = performance.now()
       const response = await fetch('/api/stock/in', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(data),
       })
 
@@ -83,11 +88,42 @@ export function useStockIn() {
         throw new Error(error.error || 'Failed to add stock')
       }
 
-      return await response.json()
+      const result = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Stock in took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
+      return result
+    },
+    onMutate: async (variables) => {
+      // Optimistic update - update UI immediately
+      await queryClient.cancelQueries({ queryKey: ['stock', variables.branch_id] })
+      
+      const previousStock = queryClient.getQueryData(['stock', variables.branch_id])
+      
+      // Optimistically update stock
+      queryClient.setQueryData(['stock', variables.branch_id], (old: any) => {
+        if (!old) return old
+        return old.map((item: any) => 
+          item.product_id === variables.product_id && item.branch_id === variables.branch_id
+            ? { ...item, quantity: (item.quantity || 0) + variables.quantity }
+            : item
+        )
+      })
+      
+      return { previousStock }
+    },
+    onError: (err, variables, context) => {
+      // Rollback on error
+      if (context?.previousStock) {
+        queryClient.setQueryData(['stock', variables.branch_id], context.previousStock)
+      }
     },
     onSuccess: (_, variables) => {
+      // Invalidate to refetch fresh data
       queryClient.invalidateQueries({ queryKey: ['stock', variables.branch_id] })
       queryClient.invalidateQueries({ queryKey: ['stock-ledger', variables.branch_id] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
     },
   })
 }
@@ -103,9 +139,11 @@ export function useStockOut() {
       reason?: string
       reference_id?: string
     }) => {
+      const startTime = performance.now()
       const response = await fetch('/api/stock/out', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
         body: JSON.stringify(data),
       })
 
@@ -114,11 +152,39 @@ export function useStockOut() {
         throw new Error(error.error || 'Failed to remove stock')
       }
 
-      return await response.json()
+      const result = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Stock out took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
+      return result
+    },
+    onMutate: async (variables) => {
+      // Optimistic update
+      await queryClient.cancelQueries({ queryKey: ['stock', variables.branch_id] })
+      
+      const previousStock = queryClient.getQueryData(['stock', variables.branch_id])
+      
+      queryClient.setQueryData(['stock', variables.branch_id], (old: any) => {
+        if (!old) return old
+        return old.map((item: any) => 
+          item.product_id === variables.product_id && item.branch_id === variables.branch_id
+            ? { ...item, quantity: Math.max(0, (item.quantity || 0) - variables.quantity) }
+            : item
+        )
+      })
+      
+      return { previousStock }
+    },
+    onError: (err, variables, context) => {
+      if (context?.previousStock) {
+        queryClient.setQueryData(['stock', variables.branch_id], context.previousStock)
+      }
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['stock', variables.branch_id] })
       queryClient.invalidateQueries({ queryKey: ['stock-ledger', variables.branch_id] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
     },
   })
 }

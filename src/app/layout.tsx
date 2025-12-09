@@ -15,7 +15,7 @@ const geistMono = Geist_Mono({
 });
 
 export const metadata: Metadata = {
-  title: "Supportta Bill Book - SaaS Billing & Stock Management",
+  title: "Supportta Biller - SaaS Billing & Stock Management",
   description: "Multi-tenant, multi-branch billing and stock management system",
 };
 

@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useState, useMemo } from 'react'
 import { useAuthStore } from '@/store/authStore'
 import { useOrders } from '@/hooks/useOrders'
 import { useBranches } from '@/hooks/useBranches'
@@ -38,17 +38,19 @@ export default function OrdersPage() {
   
   const { data: branches } = useBranches(tenantId)
   
-  // Calculate date filters
-  const now = new Date()
-  const todayStart = new Date(now)
-  todayStart.setHours(0, 0, 0, 0)
-  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
-  
-  const filters = {
-    startDate: dateFilter === 'today' ? todayStart.toISOString() : 
-               dateFilter === 'month' ? monthStart.toISOString() : undefined,
-    endDate: dateFilter === 'today' ? now.toISOString() : undefined,
-  }
+  // Memoize date filters to prevent continuous refetching
+  const filters = useMemo(() => {
+    const now = new Date()
+    const todayStart = new Date(now)
+    todayStart.setHours(0, 0, 0, 0)
+    const monthStart = new Date(now.getFullYear(), now.getMonth(), 1)
+    
+    return {
+      startDate: dateFilter === 'today' ? todayStart.toISOString() : 
+                 dateFilter === 'month' ? monthStart.toISOString() : undefined,
+      endDate: dateFilter === 'today' ? now.toISOString() : undefined,
+    }
+  }, [dateFilter]) // Only recalculate when dateFilter changes
   
   const { data: orders, isLoading, error, refetch } = useOrders(
     tenantId,

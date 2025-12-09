@@ -4,6 +4,7 @@ import { requireAuth } from '@/lib/auth/utils'
 
 // POST - Add stock (stock in)
 export async function POST(request: Request) {
+  const startTime = Date.now()
   try {
     const user = await requireAuth()
     const body = await request.json()
@@ -25,13 +26,22 @@ export async function POST(request: Request) {
       )
     }
     
-    // Get branch to get tenant_id
-    const { data: branch } = await supabase
-      .from('branches')
-      .select('tenant_id')
-      .eq('id', body.branch_id)
-      .single()
+    // Optimize: Get branch and current stock in parallel
+    const [branchResult, currentStockResult] = await Promise.all([
+      supabase
+        .from('branches')
+        .select('tenant_id')
+        .eq('id', body.branch_id)
+        .single(),
+      supabase
+        .from('current_stock')
+        .select('*')
+        .eq('branch_id', body.branch_id)
+        .eq('product_id', body.product_id)
+        .single()
+    ])
     
+    const branch = branchResult.data
     if (!branch) {
       return NextResponse.json(
         { error: 'Branch not found' },
@@ -39,59 +49,60 @@ export async function POST(request: Request) {
       )
     }
     
-    // Get current stock
-    const { data: currentStock } = await supabase
-      .from('current_stock')
-      .select('*')
-      .eq('branch_id', body.branch_id)
-      .eq('product_id', body.product_id)
-      .single()
-    
+    const currentStock = currentStockResult.data
     const previousStock = currentStock?.quantity || 0
     const newStock = previousStock + parseInt(body.quantity)
     
-    // Create ledger entry
-    const { data: ledgerEntry, error: ledgerError } = await supabase
-      .from('stock_ledger')
-      .insert({
-        tenant_id: branch.tenant_id,
-        branch_id: body.branch_id,
-        product_id: body.product_id,
-        transaction_type: 'stock_in',
-        quantity: parseInt(body.quantity),
-        previous_stock: previousStock,
-        current_stock: newStock,
-        reference_id: body.reference_id || null,
-        reason: body.reason || null,
-        created_by: user.id,
-      })
-      .select()
-      .single()
-    
-    if (ledgerError) throw ledgerError
-    
-    // Update or insert current stock
-    if (currentStock) {
-      const { error: updateError } = await supabase
-        .from('current_stock')
-        .update({ quantity: newStock })
-        .eq('id', currentStock.id)
-      
-      if (updateError) throw updateError
-    } else {
-      const { error: insertError } = await supabase
-        .from('current_stock')
+    // Optimize: Use upsert for current_stock and insert ledger in parallel
+    const [ledgerResult, stockResult] = await Promise.all([
+      supabase
+        .from('stock_ledger')
         .insert({
           tenant_id: branch.tenant_id,
           branch_id: body.branch_id,
           product_id: body.product_id,
-          quantity: newStock,
+          transaction_type: 'stock_in',
+          quantity: parseInt(body.quantity),
+          previous_stock: previousStock,
+          current_stock: newStock,
+          reference_id: body.reference_id || null,
+          reason: body.reason || null,
+          created_by: user.id,
         })
-      
-      if (insertError) throw insertError
+        .select()
+        .single(),
+      currentStock
+        ? supabase
+            .from('current_stock')
+            .update({ quantity: newStock })
+            .eq('id', currentStock.id)
+        : supabase
+            .from('current_stock')
+            .insert({
+              tenant_id: branch.tenant_id,
+              branch_id: body.branch_id,
+              product_id: body.product_id,
+              quantity: newStock,
+            })
+    ])
+    
+    if (ledgerResult.error) throw ledgerResult.error
+    if (stockResult.error) throw stockResult.error
+    
+    const duration = Date.now() - startTime
+    if (duration > 10) {
+      console.warn(`[PERF] POST /api/stock/in took ${duration}ms (target: <10ms)`)
     }
     
-    return NextResponse.json({ ledgerEntry }, { status: 201 })
+    return NextResponse.json(
+      { ledgerEntry: ledgerResult.data },
+      { 
+        status: 201,
+        headers: {
+          'X-Response-Time': `${duration}ms`
+        }
+      }
+    )
   } catch (error: any) {
     if (error.message?.includes('redirect')) {
       return NextResponse.json(
@@ -99,6 +110,8 @@ export async function POST(request: Request) {
         { status: 401 }
       )
     }
+    const duration = Date.now() - startTime
+    console.error(`[PERF] POST /api/stock/in error after ${duration}ms:`, error)
     return NextResponse.json(
       { error: error.message || 'Failed to add stock' },
       { status: 500 }

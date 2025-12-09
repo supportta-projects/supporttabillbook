@@ -36,6 +36,7 @@ export interface Branch {
   address: string
   phone: string
   is_active: boolean
+  is_main: boolean
   created_at: string
   updated_at: string
 }
@@ -78,7 +79,25 @@ export interface Product {
   gst_rate: number
   min_stock: number
   description?: string
+  stock_tracking_type: 'quantity' | 'serial'
   is_active: boolean
+  created_at: string
+  updated_at: string
+  // Joined data (optional, populated by API)
+  category?: Category
+  brand?: Brand
+}
+
+// Product Serial Number Interface
+export interface ProductSerialNumber {
+  id: string
+  tenant_id: string
+  branch_id: string
+  product_id: string
+  serial_number: string
+  status: 'available' | 'sold' | 'damaged' | 'returned'
+  bill_id?: string
+  sold_at?: string
   created_at: string
   updated_at: string
 }
@@ -106,6 +125,36 @@ export interface CurrentStock {
   branch_id: string
   product_id: string
   quantity: number
+  updated_at: string
+}
+
+// Customer Interface
+export interface Customer {
+  id: string
+  tenant_id: string
+  name: string
+  phone?: string
+  email?: string
+  address?: string
+  gst_number?: string
+  is_active: boolean
+  created_at: string
+  updated_at: string
+}
+
+// Settings Interface
+export interface Settings {
+  id: string
+  tenant_id: string
+  gst_enabled: boolean
+  gst_type: 'inclusive' | 'exclusive'
+  gst_percentage: number
+  upi_id?: string
+  bank_account_number?: string
+  bank_name?: string
+  bank_branch?: string
+  bank_ifsc_code?: string
+  created_at: string
   updated_at: string
 }
 

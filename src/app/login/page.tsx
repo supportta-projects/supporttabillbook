@@ -107,7 +107,7 @@ export default function LoginPage() {
             </div>
           </div>
           <h1 className="text-5xl font-bold text-gray-900 mb-2">
-            Supportta Bill Book
+            Supportta Biller
           </h1>
           <p className="text-xl text-gray-600">
             Simple Billing & Stock Management
@@ -137,7 +137,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <div className="text-center mt-6 text-gray-600">
-          <p className="text-sm">© 2024 Supportta Bill Book. All rights reserved.</p>
+          <p className="text-sm">© 2024 Supportta Biller. All rights reserved.</p>
         </div>
       </div>
     </div>

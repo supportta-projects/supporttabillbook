@@ -2,11 +2,12 @@ import { createClient } from '@/lib/supabase/server'
 import { NextRequest, NextResponse } from 'next/server'
 import { requireAuth } from '@/lib/auth/utils'
 
-// GET - Get single product
+// GET - Get single product with category and brand relations
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
+  const startTime = Date.now()
   const { id } = await params
   try {
     const user = await requireAuth()
@@ -14,7 +15,19 @@ export async function GET(
     
     const { data, error } = await supabase
       .from('products')
-      .select('*')
+      .select(`
+        *,
+        category:category_id (
+          id,
+          name,
+          code
+        ),
+        brand:brand_id (
+          id,
+          name,
+          code
+        )
+      `)
       .eq('id', id)
       .single()
     
@@ -26,14 +39,23 @@ export async function GET(
       )
     }
     
-    return NextResponse.json({ product: data })
+    const duration = Date.now() - startTime
+    console.log(`[PERF] GET /api/products/[id]: ${duration}ms`)
+    
+    return NextResponse.json({ product: data }, {
+      headers: {
+        'X-Response-Time': `${duration}ms`
+      }
+    })
   } catch (error: any) {
-    if (error.message?.includes('redirect')) {
+    // Handle Next.js redirect errors (NEXT_REDIRECT)
+    if (error?.message?.includes('redirect') || error?.message?.includes('NEXT_REDIRECT') || error?.digest?.includes('NEXT_REDIRECT')) {
       return NextResponse.json(
-        { error: 'Unauthorized' },
+        { error: 'Unauthorized. Please log in again.' },
         { status: 401 }
       )
     }
+    console.error('[API] GET /api/products/[id] error:', error)
     return NextResponse.json(
       { error: error.message || 'Failed to fetch product' },
       { status: 500 }
@@ -84,6 +106,8 @@ export async function PUT(
     // Build update object
     const updates: any = {}
     if (body.name !== undefined) updates.name = body.name.trim()
+    if (body.category_id !== undefined) updates.category_id = body.category_id || null
+    if (body.brand_id !== undefined) updates.brand_id = body.brand_id || null
     if (body.sku !== undefined) updates.sku = body.sku?.trim() || null
     if (body.unit !== undefined) updates.unit = body.unit.trim()
     if (body.selling_price !== undefined) updates.selling_price = parseFloat(body.selling_price)
@@ -91,13 +115,26 @@ export async function PUT(
     if (body.gst_rate !== undefined) updates.gst_rate = parseFloat(body.gst_rate)
     if (body.min_stock !== undefined) updates.min_stock = parseInt(body.min_stock)
     if (body.description !== undefined) updates.description = body.description?.trim() || null
+    if (body.stock_tracking_type !== undefined) updates.stock_tracking_type = body.stock_tracking_type
     if (body.is_active !== undefined) updates.is_active = body.is_active
     
     const { data, error } = await supabase
       .from('products')
       .update(updates)
       .eq('id', id)
-      .select()
+      .select(`
+        *,
+        category:category_id (
+          id,
+          name,
+          code
+        ),
+        brand:brand_id (
+          id,
+          name,
+          code
+        )
+      `)
       .single()
     
     if (error) throw error
@@ -146,6 +183,33 @@ export async function DELETE(
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 403 }
+      )
+    }
+    
+    // Check if product has stock or bills associated
+    const { data: stockData } = await supabase
+      .from('current_stock')
+      .select('id')
+      .eq('product_id', id)
+      .limit(1)
+    
+    const { data: billItems } = await supabase
+      .from('bill_items')
+      .select('id')
+      .eq('product_id', id)
+      .limit(1)
+    
+    if (stockData && stockData.length > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete product with existing stock. Please remove stock first.' },
+        { status: 400 }
+      )
+    }
+    
+    if (billItems && billItems.length > 0) {
+      return NextResponse.json(
+        { error: 'Cannot delete product with sales history. Consider disabling it instead.' },
+        { status: 400 }
       )
     }
     

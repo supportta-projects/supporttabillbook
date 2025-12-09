@@ -74,11 +74,14 @@ export async function GET(request: Request) {
     if (error) throw error
     
     const duration = Date.now() - startTime
-    console.log(`[PERF] GET /api/orders: ${duration}ms`)
+    if (duration > 10) {
+      console.warn(`[PERF] GET /api/orders: ${duration}ms (target: <10ms)`)
+    }
     
     return NextResponse.json({ orders: data || [] }, {
       headers: {
-        'X-Response-Time': `${duration}ms`
+        'X-Response-Time': `${duration}ms`,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       }
     })
   } catch (error: any) {

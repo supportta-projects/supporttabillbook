@@ -30,8 +30,11 @@ export default function Header() {
     <header className="bg-white border-b border-gray-200 sticky top-0 z-50">
       <div className="flex items-center justify-between px-6 py-4">
         <div className="flex items-center gap-6">
-          <Link href={user?.role === 'superadmin' ? '/superadmin/dashboard' : user?.role === 'tenant_owner' ? '/owner/dashboard' : '/branch/dashboard'}>
-            <h1 className="text-2xl font-bold text-gray-900">💰 Bill Book</h1>
+          <Link 
+            href={user?.role === 'superadmin' ? '/superadmin/dashboard' : user?.role === 'tenant_owner' ? '/owner/dashboard' : '/branch/dashboard'}
+            prefetch={true}
+          >
+            <h1 className="text-2xl font-bold text-gray-900">💰 Biller</h1>
           </Link>
           
           {/* Branch Switcher for tenant owners */}

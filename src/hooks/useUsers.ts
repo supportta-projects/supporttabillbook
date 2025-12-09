@@ -5,6 +5,7 @@ export function useUsers(tenantId?: string, branchId?: string) {
   return useQuery({
     queryKey: ['users', tenantId, branchId],
     queryFn: async () => {
+      const startTime = performance.now()
       let url = '/api/users'
       const params = new URLSearchParams()
       if (tenantId) params.append('tenant_id', tenantId)
@@ -12,11 +13,11 @@ export function useUsers(tenantId?: string, branchId?: string) {
       if (params.toString()) url += `?${params.toString()}`
       
       const response = await fetch(url, {
-        credentials: 'include', // Include cookies for authentication
+        credentials: 'include',
+        cache: 'no-store',
       })
       
       if (!response.ok) {
-        // Handle 401 Unauthorized - session expired
         if (response.status === 401) {
           if (typeof window !== 'undefined') {
             localStorage.removeItem('auth-storage')
@@ -35,18 +36,25 @@ export function useUsers(tenantId?: string, branchId?: string) {
       }
       
       const data = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Users fetch took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
       return (data.users || []) as User[]
     },
     enabled: !!tenantId || !!branchId,
     staleTime: 2 * 60 * 1000, // Cache for 2 minutes
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
     retry: (failureCount, error: any) => {
-      // Don't retry on 401 errors (authentication issues)
       if (error?.message?.includes('session has expired') || error?.message?.includes('Unauthorized')) {
         return false
       }
       return failureCount < 2
     },
+    retryDelay: 100,
   })
 }
 

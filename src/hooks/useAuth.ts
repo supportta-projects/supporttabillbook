@@ -85,28 +85,35 @@ export function useLogout() {
 }
 
 export function useCurrentUser() {
-  const { user, setUser, setLoading } = useAuthStore()
+  const { user, setUser, setLoading, isLoading } = useAuthStore()
 
   return useQuery({
     queryKey: ['user'],
     queryFn: async () => {
       setLoading(true)
-      const response = await fetch('/api/auth/me')
+      const response = await fetch('/api/auth/me', {
+        credentials: 'include',
+      })
       
       if (!response.ok) {
         setLoading(false)
+        setUser(null) // Clear user on error
         return null
       }
 
       const data = await response.json()
       if (data.user) {
         setUser(data.user as User)
+      } else {
+        setUser(null)
       }
       setLoading(false)
       return data.user as User | null
     },
-    enabled: !user,
+    enabled: !user || isLoading, // Fetch if no user OR if still loading (e.g., after refresh)
     staleTime: 5 * 60 * 1000, // 5 minutes
+    retry: 1,
+    refetchOnWindowFocus: false,
   })
 }
 

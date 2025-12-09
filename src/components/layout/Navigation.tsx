@@ -20,7 +20,8 @@ import {
   ChevronRight,
   FolderTree,
   Tag,
-  Boxes
+  Boxes,
+  UserCircle
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
@@ -67,17 +68,18 @@ const ownerNavItems: NavItem[] = [
         href: '/owner/catalogue/brands',
         icon: Boxes,
       },
-      {
-        label: 'Stock',
-        href: '/owner/catalogue/stock',
-        icon: Package,
-      },
     ],
   },
   {
     label: 'Expenses',
     href: '/owner/expenses',
     icon: DollarSign,
+    roles: ['tenant_owner'],
+  },
+  {
+    label: 'Customers',
+    href: '/owner/customers',
+    icon: UserCircle,
     roles: ['tenant_owner'],
   },
   {
@@ -90,6 +92,12 @@ const ownerNavItems: NavItem[] = [
     label: 'Branches',
     href: '/owner/branches',
     icon: Building2,
+    roles: ['tenant_owner'],
+  },
+  {
+    label: 'Settings',
+    href: '/owner/settings',
+    icon: Settings,
     roles: ['tenant_owner'],
   },
 ]
@@ -247,6 +255,7 @@ export default function Navigation() {
           <Link
             key={item.href}
             href={item.href}
+            prefetch={true}
             className={cn(
               'flex items-center gap-3 px-4 py-3 rounded-lg transition-all',
               active

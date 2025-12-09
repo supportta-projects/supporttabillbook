@@ -16,18 +16,18 @@ export function useBranches(tenantId?: string) {
   return useQuery({
     queryKey: ['branches', tenantId],
     queryFn: async () => {
+      const startTime = performance.now()
       const url = tenantId 
         ? `/api/tenants/${tenantId}/branches`
         : '/api/branches'
       
       const response = await fetch(url, {
-        credentials: 'include', // Include cookies for authentication
+        credentials: 'include',
+        cache: 'no-store',
       })
       
       if (!response.ok) {
-        // Handle 401 Unauthorized - session expired
         if (response.status === 401) {
-          // Clear any stale auth state
           if (typeof window !== 'undefined') {
             localStorage.removeItem('auth-storage')
           }
@@ -39,7 +39,6 @@ export function useBranches(tenantId?: string) {
           const error = await response.json()
           errorMessage = error.error || errorMessage
         } catch {
-          // If response is not JSON, use status text
           errorMessage = `${response.status} ${response.statusText}`
         }
         
@@ -47,18 +46,25 @@ export function useBranches(tenantId?: string) {
       }
       
       const data = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Branches fetch took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
       return (data.branches || []) as Branch[]
     },
     enabled: !!tenantId || true,
     staleTime: 2 * 60 * 1000, // Cache for 2 minutes
     gcTime: 5 * 60 * 1000, // Keep in cache for 5 minutes
+    refetchOnWindowFocus: false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
     retry: (failureCount, error: any) => {
-      // Don't retry on 401 errors (authentication issues)
       if (error?.message?.includes('session has expired') || error?.message?.includes('Unauthorized')) {
         return false
       }
       return failureCount < 2
     },
+    retryDelay: 100,
   })
 }
 

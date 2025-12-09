@@ -62,7 +62,7 @@ export default function EditBranchPage() {
     )
   }
 
-  const onSubmit = async (data: { name: string; code: string; address?: string; phone?: string }) => {
+  const onSubmit = async (data: { name: string; code: string; address?: string; phone?: string; is_main?: boolean }) => {
     try {
       await updateBranch.mutateAsync({
         id: branchId,
@@ -104,9 +104,11 @@ export default function EditBranchPage() {
                 code: branch.code,
                 address: branch.address || '',
                 phone: branch.phone || '',
+                is_main: branch.is_main || false,
               }}
               isLoading={updateBranch.isPending}
               submitLabel="Update Branch"
+              showMainBranchOption={true}
             />
           </CardContent>
         </Card>

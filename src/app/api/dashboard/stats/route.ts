@@ -26,10 +26,10 @@ export async function GET(request: Request) {
       dateFilter = monthStart.toISOString()
     }
     
-    // Build query filters
-    let billsQuery = supabase.from('bills').select('total_amount, created_at')
-    let expensesQuery = supabase.from('expenses').select('amount, expense_date, created_at')
-    let purchasesQuery = supabase.from('purchases').select('total_amount, created_at')
+    // Optimize: Build queries efficiently
+    let billsQuery = supabase.from('bills').select('total_amount, created_at', { count: 'exact' })
+    let expensesQuery = supabase.from('expenses').select('amount, expense_date, created_at', { count: 'exact' })
+    let purchasesQuery = supabase.from('purchases').select('total_amount, created_at', { count: 'exact' })
     let stockQuery = supabase.from('current_stock').select('quantity, product_id')
     
     if (branchId) {
@@ -38,7 +38,7 @@ export async function GET(request: Request) {
       purchasesQuery = purchasesQuery.eq('branch_id', branchId)
       stockQuery = stockQuery.eq('branch_id', branchId)
     } else if (tenantId && user.role === 'tenant_owner') {
-      // Get all branches for tenant
+      // Optimize: Get branch IDs first, then use in queries
       const { data: branches } = await supabase
         .from('branches')
         .select('id')
@@ -49,6 +49,20 @@ export async function GET(request: Request) {
         billsQuery = billsQuery.in('branch_id', branchIds)
         expensesQuery = expensesQuery.in('branch_id', branchIds)
         purchasesQuery = purchasesQuery.in('branch_id', branchIds)
+        // For stock, we need to filter by branch_ids
+        stockQuery = stockQuery.in('branch_id', branchIds)
+      } else {
+        // No branches, return empty stats
+        return NextResponse.json({
+          sales: { total: 0, count: 0 },
+          expenses: { total: 0, count: 0 },
+          purchases: { total: 0, count: 0 },
+          stock: { total_value: 0, total_products: 0, products_with_stock: 0, in_stock: 0, low_stock: 0, sold_out: 0 },
+          profit: { total: 0, margin: 0 },
+          period,
+        }, {
+          headers: { 'X-Response-Time': `${Date.now() - startTime}ms` }
+        })
       }
     }
     
@@ -59,7 +73,7 @@ export async function GET(request: Request) {
       purchasesQuery = purchasesQuery.gte('created_at', dateFilter)
     }
     
-    // Fetch all data in parallel
+    // Optimize: Fetch all data in parallel with limited fields
     const [billsResult, expensesResult, purchasesResult, stockResult, productsResult] = await Promise.all([
       billsQuery,
       expensesQuery,

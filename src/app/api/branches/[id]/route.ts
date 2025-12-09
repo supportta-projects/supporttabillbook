@@ -112,6 +112,36 @@ export async function PUT(
     if (body.phone !== undefined) updates.phone = body.phone?.trim() || null
     if (body.is_active !== undefined) updates.is_active = body.is_active
     
+    // Handle is_main flag
+    if (body.is_main !== undefined && body.is_main === true) {
+      // If setting this branch as main, unset other main branches for this tenant
+      await supabase
+        .from('branches')
+        .update({ is_main: false })
+        .eq('tenant_id', existingBranch.tenant_id)
+        .eq('is_main', true)
+        .neq('id', id)
+      
+      updates.is_main = true
+    } else if (body.is_main === false) {
+      // Check if this is the only main branch - prevent unsetting if it's the only one
+      const { data: otherMainBranches } = await supabase
+        .from('branches')
+        .select('id')
+        .eq('tenant_id', existingBranch.tenant_id)
+        .eq('is_main', true)
+        .neq('id', id)
+      
+      if (!otherMainBranches || otherMainBranches.length === 0) {
+        return NextResponse.json(
+          { error: 'Cannot unset main branch. At least one branch must be marked as main branch.' },
+          { status: 400 }
+        )
+      }
+      
+      updates.is_main = false
+    }
+    
     const { data, error } = await supabase
       .from('branches')
       .update(updates)
@@ -173,6 +203,20 @@ export async function DELETE(
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 403 }
+      )
+    }
+    
+    // Check if this is the main branch - prevent deletion
+    const { data: branchDetails } = await supabase
+      .from('branches')
+      .select('is_main')
+      .eq('id', id)
+      .single()
+    
+    if (branchDetails?.is_main) {
+      return NextResponse.json(
+        { error: 'Cannot delete main branch. Please set another branch as main branch first.' },
+        { status: 400 }
       )
     }
     

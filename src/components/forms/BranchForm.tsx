@@ -22,6 +22,7 @@ const branchSchema = z.object({
   code: z.string().min(1, 'Branch code is required').regex(/^[A-Z0-9_-]+$/, 'Code must contain only uppercase letters, numbers, hyphens, or underscores'),
   address: z.string().optional(),
   phone: z.string().optional(),
+  is_main: z.boolean().optional(),
   // Branch Admin fields
   create_admin: z.boolean(),
   admin_name: z.string().max(255, 'Name is too long').optional(),
@@ -48,9 +49,10 @@ interface BranchFormProps {
   defaultValues?: Partial<BranchFormValues>
   isLoading?: boolean
   submitLabel?: string
+  showMainBranchOption?: boolean
 }
 
-export default function BranchForm({ onSubmit, defaultValues, isLoading, submitLabel = 'Create Branch' }: BranchFormProps) {
+export default function BranchForm({ onSubmit, defaultValues, isLoading, submitLabel = 'Create Branch', showMainBranchOption = false }: BranchFormProps) {
   const form = useForm<BranchFormValues>({
     resolver: zodResolver(branchSchema),
     defaultValues: {
@@ -58,6 +60,7 @@ export default function BranchForm({ onSubmit, defaultValues, isLoading, submitL
       code: defaultValues?.code || '',
       address: defaultValues?.address || '',
       phone: defaultValues?.phone || '',
+      is_main: defaultValues?.is_main || false,
       create_admin: defaultValues?.create_admin ?? true,
       admin_name: defaultValues?.admin_name || '',
       admin_email: defaultValues?.admin_email || '',
@@ -163,6 +166,39 @@ export default function BranchForm({ onSubmit, defaultValues, isLoading, submitL
             />
           </div>
         </div>
+
+        {/* Main Branch Option (only in edit mode) */}
+        {showMainBranchOption && (
+          <>
+            <Separator />
+            <div className="space-y-4">
+              <FormField
+                control={form.control}
+                name="is_main"
+                render={({ field }) => (
+                  <FormItem className="flex flex-row items-center justify-between rounded-lg border p-4">
+                    <div className="space-y-0.5">
+                      <FormLabel className="text-base font-semibold">
+                        Main Branch
+                      </FormLabel>
+                      <FormDescription>
+                        Mark this branch as the main branch. Only one branch can be main branch. Main branch cannot be deleted.
+                      </FormDescription>
+                    </div>
+                    <FormControl>
+                      <input
+                        type="checkbox"
+                        checked={field.value || false}
+                        onChange={field.onChange}
+                        className="h-5 w-5 rounded border-gray-300"
+                      />
+                    </FormControl>
+                  </FormItem>
+                )}
+              />
+            </div>
+          </>
+        )}
 
         <Separator />
 
