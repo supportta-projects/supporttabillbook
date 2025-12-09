@@ -41,7 +41,7 @@ const ownerNavItems: NavItem[] = [
     roles: ['tenant_owner'],
   },
   {
-    label: 'Order Management',
+    label: 'Order',
     href: '/owner/orders',
     icon: Receipt,
     roles: ['tenant_owner'],

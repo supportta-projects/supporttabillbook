@@ -147,6 +147,7 @@ export interface Settings {
   id: string
   tenant_id: string
   gst_enabled: boolean
+  gst_number?: string
   gst_type: 'inclusive' | 'exclusive'
   gst_percentage: number
   upi_id?: string
@@ -164,13 +165,31 @@ export interface Bill {
   tenant_id: string
   branch_id: string
   invoice_number: string
+  customer_id?: string
   customer_name?: string
   customer_phone?: string
   subtotal: number
   gst_amount: number
   discount: number
   total_amount: number
+  profit_amount: number
+  paid_amount?: number
+  due_amount?: number
   payment_mode: 'cash' | 'card' | 'upi' | 'credit'
+  created_by: string
+  created_at: string
+}
+
+// Payment Transaction Interface
+export interface PaymentTransaction {
+  id: string
+  bill_id: string
+  tenant_id: string
+  branch_id: string
+  amount: number
+  payment_mode: 'cash' | 'card' | 'upi' | 'bank_transfer'
+  transaction_date: string
+  notes?: string
   created_by: string
   created_at: string
 }
@@ -183,10 +202,13 @@ export interface BillItem {
   product_name: string
   quantity: number
   unit_price: number
+  purchase_price?: number
   gst_rate: number
   gst_amount: number
   discount: number
+  profit_amount: number
   total_amount: number
+  serial_numbers?: string[] // Array of serial numbers for serial-tracked products
 }
 
 // Purchase Interface

@@ -235,6 +235,7 @@ export async function POST(
       .eq('status', 'available')
     
     const newStockCount = availableCount || 0
+    const previousStockCount = currentStockResult.data?.quantity || 0
     
     if (currentStockResult.data) {
       // Update existing stock record
@@ -252,6 +253,23 @@ export async function POST(
           product_id: id,
           quantity: newStockCount,
         })
+    }
+    
+    // Auto-active logic: If stock was 0 and now has stock, activate product
+    if (previousStockCount === 0 && newStockCount > 0) {
+      const { data: productData } = await supabase
+        .from('products')
+        .select('is_active')
+        .eq('id', id)
+        .single()
+      
+      if (productData && !productData.is_active) {
+        await supabase
+          .from('products')
+          .update({ is_active: true })
+          .eq('id', id)
+          .eq('tenant_id', product.tenant_id)
+      }
     }
     
     const duration = Date.now() - startTime

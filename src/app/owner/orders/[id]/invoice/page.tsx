@@ -1,40 +1,40 @@
 'use client'
 
 import { useParams, useRouter } from 'next/navigation'
-import { useEffect, useState } from 'react'
+import { useEffect } from 'react'
+import { useMemo } from 'react'
 import { useOrder } from '@/hooks/useOrders'
 import PageContainer from '@/components/layout/PageContainer'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button-shadcn'
-import { ArrowLeft, Download, Printer } from 'lucide-react'
+import { ArrowLeft, Download, Printer, Loader2 } from 'lucide-react'
 import Link from 'next/link'
-import { toast } from 'sonner'
 
 export default function InvoicePage() {
   const params = useParams()
   const router = useRouter()
   const orderId = params.id as string
   const { data, isLoading } = useOrder(orderId)
-  const [invoiceData, setInvoiceData] = useState<any>(null)
 
+  // Auto-redirect to order details immediately (invoice page should not be accessed directly)
   useEffect(() => {
-    if (data) {
-      fetchInvoiceData()
-    }
-  }, [data, orderId])
+    router.push(`/owner/orders/${orderId}`)
+  }, [orderId, router])
 
-  const fetchInvoiceData = async () => {
-    try {
-      const response = await fetch(`/api/orders/${orderId}/invoice`)
-      if (!response.ok) {
-        throw new Error('Failed to fetch invoice data')
-      }
-      const invoice = await response.json()
-      setInvoiceData(invoice.invoice)
-    } catch (error) {
-      console.error('Failed to fetch invoice:', error)
+  // Build invoice data from order data directly - no separate API call needed
+  const invoiceData = useMemo(() => {
+    if (!data) return null
+    
+    const { order, items } = data
+    
+    return {
+      ...order,
+      items: items || [],
+      tenant: (order as any).tenants,
+      branch: (order as any).branches,
+      created_by: (order as any).created_by_user,
     }
-  }
+  }, [data])
 
   const handlePrint = () => {
     window.print()
@@ -45,15 +45,15 @@ export default function InvoicePage() {
     if (!invoiceData) return
     
     const printContent = generateInvoiceHTML(invoiceData)
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(printContent)
-      printWindow.document.close()
-      printWindow.focus()
-      setTimeout(() => {
-        printWindow.print()
-      }, 250)
-    }
+    const blob = new Blob([printContent], { type: 'text/html' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `Invoice-${invoiceData.invoice_number}-${new Date().toISOString().split('T')[0]}.html`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
   }
 
   const generateInvoiceHTML = (invoice: any) => {
@@ -208,6 +208,12 @@ export default function InvoicePage() {
               <span>Total Amount:</span>
               <span>₹${Number(invoice.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
             </div>
+            ${invoice.profit_amount !== undefined && invoice.profit_amount > 0 ? `
+              <div class="summary-row" style="color: #9333ea; font-weight: 600;">
+                <span>Profit:</span>
+                <span>₹${Number(invoice.profit_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
+              </div>
+            ` : ''}
           </div>
           
           <div class="footer">
@@ -233,6 +239,7 @@ export default function InvoicePage() {
       <PageContainer title="Invoice">
         <Card>
           <CardContent className="p-12 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto text-gray-400 mb-4" />
             <div className="text-gray-500">Loading invoice...</div>
           </CardContent>
         </Card>
@@ -337,6 +344,14 @@ export default function InvoicePage() {
               <span>Total Amount:</span>
               <span>₹{Number(invoiceData.total_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}</span>
             </div>
+            {invoiceData.profit_amount !== undefined && invoiceData.profit_amount > 0 && (
+              <div className="flex justify-between py-2 pt-2 border-t border-gray-200">
+                <span className="text-sm font-semibold text-purple-600">Profit:</span>
+                <span className="text-sm font-bold text-purple-600">
+                  ₹{Number(invoiceData.profit_amount || 0).toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="text-center mt-12 text-sm text-gray-500">

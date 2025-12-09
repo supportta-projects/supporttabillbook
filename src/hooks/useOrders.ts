@@ -77,12 +77,17 @@ export function useOrders(tenantId?: string, branchId?: string, filters?: {
   })
 }
 
-export function useOrder(orderId: string) {
+export function useOrder(orderId: string, options?: {
+  staleTime?: number
+  refetchOnWindowFocus?: boolean
+}) {
   return useQuery({
     queryKey: ['order', orderId],
     queryFn: async () => {
+      const startTime = performance.now()
       const response = await fetch(`/api/orders/${orderId}`, {
         credentials: 'include',
+        cache: 'no-store',
       })
       
       if (!response.ok) {
@@ -104,14 +109,22 @@ export function useOrder(orderId: string) {
       }
       
       const data = await response.json()
+      const duration = performance.now() - startTime
+      if (duration > 10) {
+        console.warn(`[PERF] Order fetch took ${duration.toFixed(2)}ms (target: <10ms)`)
+      }
+      
       return {
         order: data.order as Order,
         items: data.items || [],
       }
     },
     enabled: !!orderId,
-    staleTime: 30 * 1000,
+    staleTime: options?.staleTime ?? 30 * 1000,
     gcTime: 2 * 60 * 1000,
+    refetchOnWindowFocus: options?.refetchOnWindowFocus ?? false,
+    refetchOnMount: false,
+    refetchOnReconnect: false,
   })
 }
 

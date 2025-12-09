@@ -89,6 +89,27 @@ export async function POST(request: Request) {
     if (ledgerResult.error) throw ledgerResult.error
     if (stockResult.error) throw stockResult.error
     
+    // Auto-active logic: If stock was 0 and now has stock, activate product
+    // Only activate if product was previously inactive (don't override manual deactivation)
+    if (previousStock === 0 && newStock > 0) {
+      // Check if product is currently inactive
+      const { data: product } = await supabase
+        .from('products')
+        .select('is_active')
+        .eq('id', body.product_id)
+        .single()
+      
+      // Only auto-activate if product is inactive (likely due to zero stock)
+      // This prevents overriding manual deactivation
+      if (product && !product.is_active) {
+        await supabase
+          .from('products')
+          .update({ is_active: true })
+          .eq('id', body.product_id)
+          .eq('tenant_id', branch.tenant_id)
+      }
+    }
+    
     const duration = Date.now() - startTime
     if (duration > 10) {
       console.warn(`[PERF] POST /api/stock/in took ${duration}ms (target: <10ms)`)

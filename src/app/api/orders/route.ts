@@ -31,6 +31,11 @@ export async function GET(request: Request) {
       `)
       .order('created_at', { ascending: false })
     
+    // Ensure paid_amount and due_amount are included (defaults to 0 if NULL)
+    // These fields are calculated/updated by the payment system
+    
+    // Ensure profit_amount is included (it should be by default with *)
+    
     // Tenant owners can see all branches' orders
     if (user.role === 'tenant_owner') {
       const finalTenantId = tenantId || user.tenant_id

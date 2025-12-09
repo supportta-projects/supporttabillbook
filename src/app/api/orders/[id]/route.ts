@@ -67,20 +67,27 @@ export async function GET(
       }
     }
     
-    const { data: items, error: itemsError } = await supabase
-      .from('bill_items')
-      .select('*')
-      .eq('bill_id', id)
-      .order('created_at', { ascending: true })
+    // Fetch items in parallel with bill for better performance
+    // Note: bill_items table doesn't have created_at column, so order by id for consistent ordering
+    const [itemsResult] = await Promise.all([
+      supabase
+        .from('bill_items')
+        .select('*')
+        .eq('bill_id', id)
+        .order('id', { ascending: true })
+    ])
     
-    if (itemsError) throw itemsError
+    if (itemsResult.error) throw itemsResult.error
     
     const duration = Date.now() - startTime
-    console.log(`[PERF] GET /api/orders/[id]: ${duration}ms`)
+    if (duration > 10) {
+      console.warn(`[PERF] GET /api/orders/[id]: ${duration}ms (target: <10ms)`)
+    }
     
-    return NextResponse.json({ order: bill, items: items || [] }, {
+    return NextResponse.json({ order: bill, items: itemsResult.data || [] }, {
       headers: {
-        'X-Response-Time': `${duration}ms`
+        'X-Response-Time': `${duration}ms`,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
       }
     })
   } catch (error: any) {

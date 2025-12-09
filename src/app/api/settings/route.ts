@@ -31,6 +31,7 @@ export async function GET(request: Request) {
         settings: {
           tenant_id: user.tenant_id,
           gst_enabled: false,
+          gst_number: null,
           gst_type: 'exclusive',
           gst_percentage: 0,
           upi_id: null,
@@ -85,6 +86,7 @@ export async function PUT(request: Request) {
     }
     
     if (body.gst_enabled !== undefined) updates.gst_enabled = body.gst_enabled
+    if (body.gst_number !== undefined) updates.gst_number = body.gst_number || null
     if (body.gst_type !== undefined) updates.gst_type = body.gst_type
     if (body.gst_percentage !== undefined) updates.gst_percentage = body.gst_percentage
     if (body.upi_id !== undefined) updates.upi_id = body.upi_id || null

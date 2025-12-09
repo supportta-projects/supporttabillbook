@@ -85,6 +85,15 @@ export async function POST(request: Request) {
     
     if (updateError) throw updateError
     
+    // Auto-inactive logic: If stock reaches 0, set product to inactive
+    if (newStock === 0) {
+      await supabase
+        .from('products')
+        .update({ is_active: false })
+        .eq('id', body.product_id)
+        .eq('tenant_id', branch.tenant_id)
+    }
+    
     return NextResponse.json({ ledgerEntry }, { status: 201 })
   } catch (error: any) {
     if (error.message?.includes('redirect')) {

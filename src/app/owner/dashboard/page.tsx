@@ -166,12 +166,13 @@ export default function OwnerDashboard() {
           className={stats.profit.total >= 0 ? 'border-green-200 bg-green-50' : 'border-red-200 bg-red-50'}
         />
         
-        {/* Total Products */}
+        {/* Active Products */}
         <StatCard
-          title="Total Products"
+          title="Active Products"
           value={stats.stock.total_products}
-          icon={<Package className="h-6 w-6" />}
+          icon={<Package className="h-6 w-6 text-indigo-600" />}
           description={`${stats.stock.in_stock} in stock`}
+          className="border-indigo-200 bg-indigo-50"
         />
       </div>
 

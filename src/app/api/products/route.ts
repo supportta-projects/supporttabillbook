@@ -46,6 +46,10 @@ export async function GET(request: Request) {
       query = query.eq('is_active', isActive === 'true')
     }
     
+    // Limit results for better performance (default 100, can be increased if needed)
+    const limit = parseInt(searchParams.get('limit') || '100')
+    query = query.limit(limit)
+    
     const { data, error } = await query
     
     if (error) throw error

@@ -78,6 +78,8 @@ export async function DELETE(
       .eq('product_id', id)
       .single()
     
+    const previousStockCount = currentStock?.quantity || 0
+    
     if (currentStock) {
       await supabase
         .from('current_stock')
@@ -94,6 +96,16 @@ export async function DELETE(
           product_id: id,
           quantity: newStockCount,
         })
+    }
+    
+    // Auto-inactive logic: If stock reaches 0, set product to inactive
+    if (newStockCount === 0 && previousStockCount > 0) {
+      const product = serialNumber.products as any
+      await supabase
+        .from('products')
+        .update({ is_active: false })
+        .eq('id', id)
+        .eq('tenant_id', product.tenant_id)
     }
     
     const duration = Date.now() - startTime

@@ -9,6 +9,7 @@ CREATE TABLE IF NOT EXISTS settings (
   
   -- GST Settings
   gst_enabled BOOLEAN DEFAULT false,
+  gst_number VARCHAR(50),
   gst_type VARCHAR(20) DEFAULT 'exclusive' CHECK (gst_type IN ('inclusive', 'exclusive')),
   gst_percentage DECIMAL(5, 2) DEFAULT 0 CHECK (gst_percentage >= 0 AND gst_percentage <= 100),
   

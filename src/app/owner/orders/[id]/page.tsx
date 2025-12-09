@@ -1,11 +1,27 @@
 'use client'
 
 import { useParams, useRouter } from 'next/navigation'
+import { useState } from 'react'
 import { useOrder } from '@/hooks/useOrders'
 import PageContainer from '@/components/layout/PageContainer'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button-shadcn'
-import { ArrowLeft, Receipt, Download, Building2, User, Phone, Calendar, DollarSign, FileText } from 'lucide-react'
+import { Input } from '@/components/ui/input-shadcn'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from '@/components/ui/dialog'
+import { ArrowLeft, Receipt, Download, Building2, User, Phone, DollarSign, FileText, CreditCard, Loader2, Edit2, Save, X as XIcon } from 'lucide-react'
 import Link from 'next/link'
 import { toast } from 'sonner'
 
@@ -13,93 +29,151 @@ export default function OrderDetailPage() {
   const params = useParams()
   const router = useRouter()
   const orderId = params.id as string
-  const { data, isLoading, error } = useOrder(orderId)
+  const { data, isLoading, error, refetch } = useOrder(orderId)
+  const [showPaymentDialog, setShowPaymentDialog] = useState(false)
+  const [paymentAmount, setPaymentAmount] = useState('')
+  const [paymentMode, setPaymentMode] = useState<'cash' | 'card' | 'upi' | 'bank_transfer'>('cash')
+  const [isProcessingPayment, setIsProcessingPayment] = useState(false)
+  const [editingItemId, setEditingItemId] = useState<string | null>(null)
+  const [editValues, setEditValues] = useState<{ [key: string]: { unit_price: string; discount: string; quantity: string } }>({})
+  const [isUpdatingItem, setIsUpdatingItem] = useState(false)
 
   const handleDownloadInvoice = async () => {
     try {
-      const response = await fetch(`/api/orders/${orderId}/invoice`)
+      // Show loading state
+      toast.loading('Generating PDF invoice...', { id: 'pdf-download' })
+      
+      // Generate PDF via API
+      const response = await fetch(`/api/orders/${orderId}/invoice/pdf`, {
+        method: 'GET',
+      })
+      
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({ error: 'Failed to generate PDF' }))
+        throw new Error(errorData.error || 'Failed to generate PDF')
+      }
+      
+      const blob = await response.blob()
+      const url = window.URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `Invoice-${data?.order.invoice_number || orderId}.pdf`
+      document.body.appendChild(link)
+      link.click()
+      document.body.removeChild(link)
+      window.URL.revokeObjectURL(url)
+      
+      toast.success('Invoice downloaded successfully', { id: 'pdf-download' })
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to download invoice', { id: 'pdf-download' })
+    }
+  }
+
+  const handleEditItem = (item: any) => {
+    setEditingItemId(item.id)
+    setEditValues({
+      [item.id]: {
+        unit_price: item.unit_price.toString(),
+        discount: (item.discount || 0).toString(),
+        quantity: item.quantity.toString(),
+      }
+    })
+  }
+
+  const handleCancelEdit = () => {
+    setEditingItemId(null)
+    setEditValues({})
+  }
+
+  const handleSaveItem = async (itemId: string) => {
+    const values = editValues[itemId]
+    if (!values) return
+
+    const unitPrice = parseFloat(values.unit_price)
+    const discount = parseFloat(values.discount) || 0
+    const quantity = parseInt(values.quantity)
+
+    if (isNaN(unitPrice) || unitPrice <= 0) {
+      toast.error('Invalid unit price')
+      return
+    }
+
+    if (isNaN(quantity) || quantity <= 0) {
+      toast.error('Invalid quantity')
+      return
+    }
+
+    setIsUpdatingItem(true)
+    try {
+      const response = await fetch(`/api/orders/${orderId}/items/${itemId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          unit_price: unitPrice,
+          discount: discount,
+          quantity: quantity,
+        }),
+      })
+
       if (!response.ok) {
         const error = await response.json()
-        throw new Error(error.error || 'Failed to generate invoice')
+        throw new Error(error.error || 'Failed to update item')
       }
-      
-      const invoiceData = await response.json()
-      
-      // For now, open invoice in new window for printing
-      // In production, you would generate PDF here
-      const printWindow = window.open('', '_blank')
-      if (printWindow) {
-        printWindow.document.write(`
-          <html>
-            <head>
-              <title>Invoice - ${invoiceData.invoice.invoice_number}</title>
-              <style>
-                body { font-family: Arial, sans-serif; padding: 20px; }
-                .header { text-align: center; margin-bottom: 30px; }
-                .invoice-details { display: flex; justify-content: space-between; margin-bottom: 30px; }
-                table { width: 100%; border-collapse: collapse; margin-bottom: 20px; }
-                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-                th { background-color: #f2f2f2; }
-                .total { text-align: right; font-weight: bold; font-size: 18px; }
-                @media print { .no-print { display: none; } }
-              </style>
-            </head>
-            <body>
-              <div class="header">
-                <h1>${invoiceData.invoice.tenant?.name || 'Shop'}</h1>
-                <p>Invoice</p>
-              </div>
-              <div class="invoice-details">
-                <div>
-                  <p><strong>Invoice Number:</strong> ${invoiceData.invoice.invoice_number}</p>
-                  <p><strong>Date:</strong> ${new Date(invoiceData.invoice.created_at).toLocaleDateString()}</p>
-                  <p><strong>Branch:</strong> ${invoiceData.invoice.branch?.name || 'N/A'}</p>
-                </div>
-                <div>
-                  ${invoiceData.invoice.customer_name ? `<p><strong>Customer:</strong> ${invoiceData.invoice.customer_name}</p>` : ''}
-                  ${invoiceData.invoice.customer_phone ? `<p><strong>Phone:</strong> ${invoiceData.invoice.customer_phone}</p>` : ''}
-                </div>
-              </div>
-              <table>
-                <thead>
-                  <tr>
-                    <th>Item</th>
-                    <th>Qty</th>
-                    <th>Price</th>
-                    <th>GST</th>
-                    <th>Total</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  ${invoiceData.invoice.items.map((item: any) => `
-                    <tr>
-                      <td>${item.product_name}</td>
-                      <td>${item.quantity}</td>
-                      <td>₹${Number(item.unit_price).toLocaleString('en-IN')}</td>
-                      <td>${item.gst_rate}%</td>
-                      <td>₹${Number(item.total_amount).toLocaleString('en-IN')}</td>
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-              <div class="total">
-                <p>Subtotal: ₹${Number(invoiceData.invoice.subtotal || 0).toLocaleString('en-IN')}</p>
-                ${invoiceData.invoice.discount > 0 ? `<p>Discount: ₹${Number(invoiceData.invoice.discount).toLocaleString('en-IN')}</p>` : ''}
-                <p>GST: ₹${Number(invoiceData.invoice.gst_amount || 0).toLocaleString('en-IN')}</p>
-                <p><strong>Total: ₹${Number(invoiceData.invoice.total_amount || 0).toLocaleString('en-IN')}</strong></p>
-                <p>Payment Mode: ${invoiceData.invoice.payment_mode?.toUpperCase() || 'CASH'}</p>
-              </div>
-              <div class="no-print" style="margin-top: 30px; text-align: center;">
-                <button onclick="window.print()">Print Invoice</button>
-              </div>
-            </body>
-          </html>
-        `)
-        printWindow.document.close()
-        toast.success('Invoice opened for printing')
-      }
+
+      toast.success('Item updated successfully')
+      setEditingItemId(null)
+      setEditValues({})
+      refetch()
     } catch (error: any) {
-      toast.error(error.message || 'Failed to generate invoice')
+      toast.error(error.message || 'Failed to update item')
+    } finally {
+      setIsUpdatingItem(false)
+    }
+  }
+
+  const handleCollectPayment = async () => {
+    if (!data?.order) return
+    
+    const amount = parseFloat(paymentAmount)
+    if (isNaN(amount) || amount <= 0) {
+      toast.error('Please enter a valid amount')
+      return
+    }
+    
+    const order = data.order as any
+    const currentPaid = order.paid_amount || 0
+    const totalAmount = order.total_amount
+    const newPaid = currentPaid + amount
+    
+    if (newPaid > totalAmount) {
+      toast.error(`Payment amount exceeds total. Maximum: ₹${(totalAmount - currentPaid).toLocaleString('en-IN')}`)
+      return
+    }
+    
+    setIsProcessingPayment(true)
+    try {
+      const response = await fetch(`/api/orders/${orderId}/payment`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          amount,
+          payment_mode: paymentMode,
+        }),
+      })
+      
+      if (!response.ok) {
+        const error = await response.json()
+        throw new Error(error.error || 'Failed to record payment')
+      }
+      
+      toast.success('Payment recorded successfully')
+      setShowPaymentDialog(false)
+      setPaymentAmount('')
+      refetch()
+    } catch (error: any) {
+      toast.error(error.message || 'Failed to record payment')
+    } finally {
+      setIsProcessingPayment(false)
     }
   }
 
@@ -108,6 +182,7 @@ export default function OrderDetailPage() {
       <PageContainer title="Order Details">
         <Card>
           <CardContent className="p-12 text-center">
+            <Loader2 className="h-8 w-8 animate-spin mx-auto mb-4 text-blue-600" />
             <div className="text-gray-500">Loading order details...</div>
           </CardContent>
         </Card>
@@ -131,6 +206,11 @@ export default function OrderDetailPage() {
   }
 
   const { order, items } = data
+  const orderWithExtras = order as any
+  const paidAmount = orderWithExtras.paid_amount || 0
+  const totalAmount = order.total_amount || 0
+  const dueAmount = totalAmount - paidAmount
+  const isFullyPaid = dueAmount <= 0
 
   return (
     <PageContainer
@@ -161,10 +241,71 @@ export default function OrderDetailPage() {
                   })}
                 </p>
               </div>
-              <Button onClick={handleDownloadInvoice} className="gap-2">
-                <Download className="h-4 w-4" />
-                Download Invoice
-              </Button>
+              <div className="flex gap-2">
+                <Button onClick={handleDownloadInvoice} className="gap-2">
+                  <Download className="h-4 w-4" />
+                  Download PDF
+                </Button>
+                {!isFullyPaid && (
+                  <Dialog open={showPaymentDialog} onOpenChange={setShowPaymentDialog}>
+                    <DialogTrigger asChild>
+                      <Button variant="outline" className="gap-2">
+                        <CreditCard className="h-4 w-4" />
+                        Collect Payment
+                      </Button>
+                    </DialogTrigger>
+                    <DialogContent>
+                      <DialogHeader>
+                        <DialogTitle>Collect Payment</DialogTitle>
+                      </DialogHeader>
+                      <div className="space-y-4">
+                        <div>
+                          <label className="text-sm font-medium mb-1 block">Amount</label>
+                          <Input
+                            type="number"
+                            value={paymentAmount}
+                            onChange={(e) => setPaymentAmount(e.target.value)}
+                            placeholder={`Max: ₹${dueAmount.toLocaleString('en-IN')}`}
+                            max={dueAmount}
+                            step="0.01"
+                          />
+                          <p className="text-xs text-gray-500 mt-1">
+                            Due Amount: ₹{dueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </p>
+                        </div>
+                        <div>
+                          <label className="text-sm font-medium mb-1 block">Payment Mode</label>
+                          <Select value={paymentMode} onValueChange={(val: any) => setPaymentMode(val)}>
+                            <SelectTrigger>
+                              <SelectValue />
+                            </SelectTrigger>
+                            <SelectContent>
+                              <SelectItem value="cash">Cash</SelectItem>
+                              <SelectItem value="card">Card</SelectItem>
+                              <SelectItem value="upi">UPI</SelectItem>
+                              <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                            </SelectContent>
+                          </Select>
+                        </div>
+                        <Button 
+                          onClick={handleCollectPayment}
+                          disabled={isProcessingPayment || !paymentAmount}
+                          className="w-full"
+                        >
+                          {isProcessingPayment ? (
+                            <>
+                              <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                              Processing...
+                            </>
+                          ) : (
+                            'Record Payment'
+                          )}
+                        </Button>
+                      </div>
+                    </DialogContent>
+                  </Dialog>
+                )}
+              </div>
             </div>
           </CardHeader>
           <CardContent>
@@ -174,16 +315,16 @@ export default function OrderDetailPage() {
                   <Building2 className="h-4 w-4 text-gray-400" />
                   <div>
                     <p className="text-xs text-gray-500">Branch</p>
-                    <p className="font-semibold">{(order as any).branches?.name || 'N/A'}</p>
+                    <p className="font-semibold">{orderWithExtras.branches?.name || 'N/A'}</p>
                   </div>
                 </div>
                 
-                {(order as any).created_by_user && (
+                {orderWithExtras.created_by_user && (
                   <div className="flex items-center gap-2">
                     <User className="h-4 w-4 text-gray-400" />
                     <div>
                       <p className="text-xs text-gray-500">Created By</p>
-                      <p className="font-semibold">{(order as any).created_by_user.full_name}</p>
+                      <p className="font-semibold">{orderWithExtras.created_by_user.full_name}</p>
                     </div>
                   </div>
                 )}
@@ -229,6 +370,26 @@ export default function OrderDetailPage() {
                 </div>
               </div>
             </div>
+            
+            {/* Payment Status */}
+            <div className="mt-6 p-4 bg-gray-50 rounded-lg">
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <p className="text-xs text-gray-500">Total Amount</p>
+                  <p className="text-lg font-bold">₹{totalAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Paid Amount</p>
+                  <p className="text-lg font-bold text-green-600">₹{paidAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">Due Amount</p>
+                  <p className={`text-lg font-bold ${isFullyPaid ? 'text-green-600' : 'text-red-600'}`}>
+                    ₹{dueAmount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                  </p>
+                </div>
+              </div>
+            </div>
           </CardContent>
         </Card>
 
@@ -248,19 +409,114 @@ export default function OrderDetailPage() {
                     <th className="text-right py-3 px-4 font-semibold">GST Rate</th>
                     <th className="text-right py-3 px-4 font-semibold">Discount</th>
                     <th className="text-right py-3 px-4 font-semibold">Total</th>
+                    <th className="text-center py-3 px-4 font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {items.map((item: any, index: number) => (
-                    <tr key={item.id || index} className="border-b">
-                      <td className="py-3 px-4">{item.product_name}</td>
-                      <td className="text-right py-3 px-4">{item.quantity}</td>
-                      <td className="text-right py-3 px-4">₹{Number(item.unit_price).toLocaleString('en-IN')}</td>
-                      <td className="text-right py-3 px-4">{item.gst_rate}%</td>
-                      <td className="text-right py-3 px-4">₹{Number(item.discount || 0).toLocaleString('en-IN')}</td>
-                      <td className="text-right py-3 px-4 font-semibold">₹{Number(item.total_amount).toLocaleString('en-IN')}</td>
-                    </tr>
-                  ))}
+                  {items.map((item: any, index: number) => {
+                    const isEditing = editingItemId === item.id
+                    const editValue = editValues[item.id] || {
+                      unit_price: item.unit_price.toString(),
+                      discount: (item.discount || 0).toString(),
+                      quantity: item.quantity.toString(),
+                    }
+                    
+                    return (
+                      <tr key={item.id || index} className="border-b hover:bg-gray-50">
+                        <td className="py-3 px-4">{item.product_name}</td>
+                        <td className="text-right py-3 px-4">
+                          {isEditing ? (
+                            <Input
+                              type="number"
+                              value={editValue.quantity}
+                              onChange={(e) => setEditValues({
+                                ...editValues,
+                                [item.id]: { ...editValue, quantity: e.target.value }
+                              })}
+                              className="w-20 text-right h-8 text-sm"
+                              min="1"
+                            />
+                          ) : (
+                            item.quantity
+                          )}
+                        </td>
+                        <td className="text-right py-3 px-4">
+                          {isEditing ? (
+                            <Input
+                              type="number"
+                              value={editValue.unit_price}
+                              onChange={(e) => setEditValues({
+                                ...editValues,
+                                [item.id]: { ...editValue, unit_price: e.target.value }
+                              })}
+                              className="w-24 text-right h-8 text-sm"
+                              step="0.01"
+                              min="0"
+                            />
+                          ) : (
+                            `₹${Number(item.unit_price).toLocaleString('en-IN')}`
+                          )}
+                        </td>
+                        <td className="text-right py-3 px-4">{item.gst_rate}%</td>
+                        <td className="text-right py-3 px-4">
+                          {isEditing ? (
+                            <Input
+                              type="number"
+                              value={editValue.discount}
+                              onChange={(e) => setEditValues({
+                                ...editValues,
+                                [item.id]: { ...editValue, discount: e.target.value }
+                              })}
+                              className="w-24 text-right h-8 text-sm"
+                              step="0.01"
+                              min="0"
+                            />
+                          ) : (
+                            `₹${Number(item.discount || 0).toLocaleString('en-IN')}`
+                          )}
+                        </td>
+                        <td className="text-right py-3 px-4 font-semibold">₹{Number(item.total_amount).toLocaleString('en-IN')}</td>
+                        <td className="text-center py-3 px-4">
+                          {isEditing ? (
+                            <div className="flex items-center justify-center gap-2">
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleSaveItem(item.id)}
+                                disabled={isUpdatingItem}
+                                className="h-7 w-7 p-0"
+                              >
+                                {isUpdatingItem ? (
+                                  <Loader2 className="h-4 w-4 animate-spin" />
+                                ) : (
+                                  <Save className="h-4 w-4 text-green-600" />
+                                )}
+                              </Button>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={handleCancelEdit}
+                                disabled={isUpdatingItem}
+                                className="h-7 w-7 p-0"
+                              >
+                                <XIcon className="h-4 w-4 text-red-600" />
+                              </Button>
+                            </div>
+                          ) : (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => handleEditItem(item)}
+                              className="h-7 w-7 p-0"
+                              title="Edit Item"
+                            >
+                              <Edit2 className="h-4 w-4" />
+                            </Button>
+                          )}
+                        </td>
+                      </tr>
+                    )
+                  })}
                 </tbody>
               </table>
             </div>
@@ -294,6 +550,14 @@ export default function OrderDetailPage() {
                   ₹{Number(order.total_amount || 0).toLocaleString('en-IN')}
                 </span>
               </div>
+              {orderWithExtras.profit_amount !== undefined && (
+                <div className="flex justify-between pt-2 border-t border-gray-200">
+                  <span className="text-sm font-semibold text-purple-600">Profit:</span>
+                  <span className="text-sm font-bold text-purple-600">
+                    ₹{Number(orderWithExtras.profit_amount || 0).toLocaleString('en-IN')}
+                  </span>
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -301,4 +565,3 @@ export default function OrderDetailPage() {
     </PageContainer>
   )
 }
-

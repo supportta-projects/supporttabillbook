@@ -35,6 +35,7 @@ export default function OwnerSettingsPage() {
   
   const [formData, setFormData] = useState({
     gst_enabled: false,
+    gst_number: '',
     gst_type: 'exclusive' as 'inclusive' | 'exclusive',
     gst_percentage: 0,
     upi_id: '',
@@ -43,12 +44,16 @@ export default function OwnerSettingsPage() {
     bank_branch: '',
     bank_ifsc_code: '',
   })
+  
+  // Initialize form data when settings load to prevent uncontrolled input warning
+  const [isInitialized, setIsInitialized] = useState(false)
   const [isSaving, setIsSaving] = useState(false)
 
   useEffect(() => {
-    if (settings) {
+    if (settings && !isInitialized) {
       setFormData({
         gst_enabled: settings.gst_enabled ?? false,
+        gst_number: settings.gst_number || '',
         gst_type: settings.gst_type ?? 'exclusive',
         gst_percentage: settings.gst_percentage ?? 0,
         upi_id: settings.upi_id || '',
@@ -57,8 +62,9 @@ export default function OwnerSettingsPage() {
         bank_branch: settings.bank_branch || '',
         bank_ifsc_code: settings.bank_ifsc_code || '',
       })
+      setIsInitialized(true)
     }
-  }, [settings])
+  }, [settings, isInitialized])
 
   const handleSave = async () => {
     setIsSaving(true)
@@ -136,6 +142,27 @@ export default function OwnerSettingsPage() {
 
             {formData.gst_enabled && (
               <div className="space-y-4 pl-4 border-l-2 border-blue-200">
+                {/* GST Number */}
+                <div>
+                  <Label htmlFor="gst_number" className="text-base font-semibold">
+                    GST Number (GSTIN)
+                  </Label>
+                  <Input
+                    id="gst_number"
+                    type="text"
+                    value={formData.gst_number}
+                    onChange={(e) =>
+                      setFormData({ ...formData, gst_number: e.target.value.toUpperCase() })
+                    }
+                    className="h-11 mt-2"
+                    placeholder="29ABCDE1234F1Z5"
+                    maxLength={15}
+                  />
+                  <p className="text-sm text-gray-600 mt-1">
+                    Enter your 15-character GSTIN (GST Identification Number)
+                  </p>
+                </div>
+
                 {/* GST Type */}
                 <div>
                   <Label htmlFor="gst_type" className="text-base font-semibold">
@@ -173,7 +200,7 @@ export default function OwnerSettingsPage() {
                     step="0.01"
                     min="0"
                     max="100"
-                    value={formData.gst_percentage}
+                    value={formData.gst_percentage ?? 0}
                     onChange={(e) =>
                       setFormData({ 
                         ...formData, 
@@ -253,7 +280,7 @@ export default function OwnerSettingsPage() {
                   <Input
                     id="bank_name"
                     type="text"
-                    value={formData.bank_name}
+                    value={formData.bank_name ?? ''}
                     onChange={(e) =>
                       setFormData({ ...formData, bank_name: e.target.value })
                     }
@@ -270,7 +297,7 @@ export default function OwnerSettingsPage() {
                   <Input
                     id="bank_branch"
                     type="text"
-                    value={formData.bank_branch}
+                    value={formData.bank_branch ?? ''}
                     onChange={(e) =>
                       setFormData({ ...formData, bank_branch: e.target.value })
                     }
@@ -287,7 +314,7 @@ export default function OwnerSettingsPage() {
                   <Input
                     id="bank_ifsc_code"
                     type="text"
-                    value={formData.bank_ifsc_code}
+                    value={formData.bank_ifsc_code ?? ''}
                     onChange={(e) =>
                       setFormData({ ...formData, bank_ifsc_code: e.target.value.toUpperCase() })
                     }

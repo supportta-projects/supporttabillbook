@@ -46,6 +46,7 @@ import {
   ChevronLeft,
   ChevronRight
 } from 'lucide-react'
+import { Switch } from '@/components/ui/switch'
 import { toast } from 'sonner'
 import DeleteConfirmDialog from '@/components/modals/DeleteConfirmDialog'
 import {
@@ -98,6 +99,8 @@ export default function ProductsPage() {
   const [selectedProductForStock, setSelectedProductForStock] = useState<Product | null>(null)
   const [stockQuantity, setStockQuantity] = useState<string>('1')
   const [newSerialNumber, setNewSerialNumber] = useState<string>('')
+  // Local state for adjusted quantity (before saving)
+  const [adjustedQuantity, setAdjustedQuantity] = useState<number>(0)
   
   // Set default branch to main branch if not set
   useEffect(() => {
@@ -117,6 +120,13 @@ export default function ProductsPage() {
     item.product_id === selectedProductForStock?.id && item.branch_id === selectedBranchId
   )
   const currentQuantity = currentStockItem?.quantity || 0
+  
+  // Update adjusted quantity when dialog opens or product/branch changes
+  useEffect(() => {
+    if (quickAddStockOpen && selectedProductForStock && selectedBranchId) {
+      setAdjustedQuantity(currentQuantity)
+    }
+  }, [quickAddStockOpen, selectedProductForStock?.id, selectedBranchId, currentQuantity])
   
   // Get serial numbers for serial-based products
   const { data: serialNumbers, refetch: refetchSerials } = useSerialNumbers(
@@ -174,12 +184,18 @@ export default function ProductsPage() {
     )
     const branchQuantity = productStock.find(s => s.branch_id === selectedBranchId)?.quantity || 0
     
+    // Auto-inactive logic: If stock is 0, product should be inactive
+    const shouldBeInactive = branchQuantity === 0
+    
     return {
       ...product,
       branchStock: branchQuantity,
       stockByBranch: productStock,
       isLowStock: product.min_stock > 0 && branchQuantity <= product.min_stock && branchQuantity > 0,
       isSoldOut: branchQuantity === 0,
+      shouldBeInactive, // Flag to indicate if product should be inactive due to stock
+      // Override is_active if stock is 0 (for display purposes, actual DB update happens in API)
+      effectiveIsActive: shouldBeInactive ? false : product.is_active,
     }
   })
 
@@ -478,23 +494,24 @@ export default function ProductsPage() {
           <CardContent className="p-0">
             <Table>
               <TableHeader>
-                <TableRow className="bg-gray-50">
-                  <TableHead className="w-[300px] font-semibold">Product</TableHead>
-                  <TableHead className="font-semibold">Category</TableHead>
-                  <TableHead className="font-semibold">Brand</TableHead>
-                  <TableHead className="font-semibold text-right">Price</TableHead>
-                  <TableHead className="font-semibold text-right">Stock</TableHead>
-                  <TableHead className="font-semibold text-center">Status</TableHead>
-                  <TableHead className="font-semibold text-right w-[100px]">Actions</TableHead>
+                <TableRow className="bg-gray-50 border-b-2 border-gray-200">
+                  <TableHead className="w-[280px] font-semibold text-gray-900">Product</TableHead>
+                  <TableHead className="font-semibold text-gray-900">Category</TableHead>
+                  <TableHead className="font-semibold text-gray-900">Brand</TableHead>
+                  <TableHead className="font-semibold text-right text-gray-900">Price</TableHead>
+                  <TableHead className="font-semibold text-right text-gray-900">Stock</TableHead>
+                  <TableHead className="font-semibold text-center text-gray-900 w-[140px]">Status</TableHead>
+                  <TableHead className="font-semibold text-right text-gray-900 w-[100px]">Actions</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {paginatedProducts.map((product) => (
                   <TableRow 
                     key={product.id}
-                    className={`hover:bg-gray-50 transition-colors ${
-                      product.isSoldOut ? 'bg-red-50/50' : 
-                      product.isLowStock ? 'bg-yellow-50/50' : ''
+                    className={`hover:bg-gray-50 transition-colors border-b ${
+                      product.isSoldOut ? 'bg-red-50/30' : 
+                      product.isLowStock ? 'bg-yellow-50/30' : 
+                      'bg-white'
                     }`}
                   >
                     {/* Product Info */}
@@ -528,8 +545,19 @@ export default function ProductsPage() {
                       )}
                     </TableCell>
 
-                    {/* Price */}
+                    {/* Brand */}
                     <TableCell>
+                      {product.brand ? (
+                        <span className="inline-flex items-center px-2.5 py-1 rounded-full text-xs font-medium bg-purple-100 text-purple-800">
+                          {product.brand.name}
+                        </span>
+                      ) : (
+                        <span className="text-sm text-gray-400">—</span>
+                      )}
+                    </TableCell>
+
+                    {/* Price */}
+                    <TableCell className="text-right">
                       <div className="font-semibold text-gray-900 text-lg">
                         ₹{Number(product.selling_price).toLocaleString('en-IN')}
                       </div>
@@ -565,6 +593,10 @@ export default function ProductsPage() {
                             setSelectedProductForStock(product)
                             setStockQuantity('1')
                             setNewSerialNumber('')
+                            // Initialize adjusted quantity with current stock
+                            const productStock = (Array.isArray(branchStock) ? branchStock as StockItem[] : [])
+                              .find((s: StockItem) => s.product_id === product.id && s.branch_id === selectedBranchId)
+                            setAdjustedQuantity(productStock?.quantity || 0)
                             setQuickAddStockOpen(true)
                           }}
                           disabled={!selectedBranchId}
@@ -575,18 +607,29 @@ export default function ProductsPage() {
                       </div>
                     </TableCell>
 
-                    {/* Status */}
+                    {/* Status - Toggle Switch */}
                     <TableCell className="text-center">
-                      {product.is_active ? (
-                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-green-100 text-green-700">
-                          <CheckCircle className="h-3 w-3" />
-                          Active
+                      <div className="flex items-center justify-center gap-2">
+                        <Switch
+                          checked={product.effectiveIsActive}
+                          onCheckedChange={async (checked) => {
+                            // Prevent enabling if stock is 0
+                            if (checked && product.branchStock === 0) {
+                              toast.error('Cannot activate product with zero stock. Please add stock first.')
+                              return
+                            }
+                            await handleToggleActive(product)
+                          }}
+                          disabled={toggleActive.isPending || (product.branchStock === 0 && !product.effectiveIsActive)}
+                        />
+                        <span className={`text-xs font-medium ${
+                          product.effectiveIsActive ? 'text-green-700' : 'text-gray-600'
+                        }`}>
+                          {product.effectiveIsActive ? 'Active' : 'Inactive'}
                         </span>
-                      ) : (
-                        <span className="inline-flex items-center gap-1 px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                          <XCircle className="h-3 w-3" />
-                          Inactive
-                        </span>
+                      </div>
+                      {product.branchStock === 0 && (
+                        <div className="text-xs text-red-600 mt-1">No Stock</div>
                       )}
                     </TableCell>
 
@@ -717,23 +760,11 @@ export default function ProductsPage() {
           setSelectedProductForStock(null)
           setStockQuantity('1')
           setNewSerialNumber('')
+          setAdjustedQuantity(0)
         }}>
           <div className="bg-white rounded-lg p-6 w-full max-w-lg mx-4 shadow-xl max-h-[90vh] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <h3 className="text-lg font-semibold">Manage Stock</h3>
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8 w-8 p-0"
-                onClick={() => {
-                  setQuickAddStockOpen(false)
-                  setSelectedProductForStock(null)
-                  setStockQuantity('1')
-                  setNewSerialNumber('')
-                }}
-              >
-                <X className="h-4 w-4" />
-              </Button>
             </div>
             <div className="space-y-4">
               <div>
@@ -775,82 +806,65 @@ export default function ProductsPage() {
               {/* Quantity-based Stock Management */}
               {selectedProductForStock.stock_tracking_type === 'quantity' && (
                 <div>
-                  <label className="text-sm font-medium mb-2 block">Current Stock</label>
-                  <div className="p-4 bg-blue-50 rounded-lg border border-blue-200 mb-4">
-                    <div className="text-2xl font-bold text-blue-600 text-center">
-                      {currentQuantity} {selectedProductForStock.unit}
+                  <label className="text-sm font-medium mb-3 block">Adjust Stock Quantity</label>
+                  <div className="flex items-center justify-center gap-4">
+                    {/* Decrement Button */}
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      className="h-12 w-12 p-0 rounded-full"
+                      onClick={() => {
+                        const decrementAmount = parseInt(stockQuantity) || 1
+                        setAdjustedQuantity(prev => Math.max(0, prev - decrementAmount))
+                      }}
+                      disabled={adjustedQuantity <= 0}
+                    >
+                      <Minus className="h-5 w-5" />
+                    </Button>
+                    
+                    {/* Current/Adjusted Quantity Display */}
+                    <div className="flex flex-col items-center min-w-[120px]">
+                      <div className="text-3xl font-bold text-gray-900">
+                        {adjustedQuantity}
+                      </div>
+                      <div className="text-sm text-gray-500 mt-1">
+                        {selectedProductForStock.unit}
+                      </div>
+                      {adjustedQuantity !== currentQuantity && (
+                        <div className="text-xs text-blue-600 mt-1">
+                          {adjustedQuantity > currentQuantity ? '+' : ''}
+                          {adjustedQuantity - currentQuantity} from {currentQuantity}
+                        </div>
+                      )}
                     </div>
+                    
+                    {/* Increment Button */}
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      className="h-12 w-12 p-0 rounded-full"
+                      onClick={() => {
+                        const incrementAmount = parseInt(stockQuantity) || 1
+                        setAdjustedQuantity(prev => prev + incrementAmount)
+                      }}
+                    >
+                      <Plus className="h-5 w-5" />
+                    </Button>
                   </div>
                   
-                  <div>
-                    <label className="text-sm font-medium mb-2 block">Adjust Quantity</label>
-                    <div className="flex items-center gap-3">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10 w-10 p-0"
-                        onClick={async () => {
-                          if (!selectedBranchId || currentQuantity <= 0) {
-                            toast.error('Cannot decrease stock below 0')
-                            return
-                          }
-                          try {
-                            await stockOut.mutateAsync({
-                              branch_id: selectedBranchId,
-                              product_id: selectedProductForStock.id,
-                              quantity: parseInt(stockQuantity) || 1,
-                              reason: 'Stock adjustment from products page',
-                            })
-                            toast.success(`Successfully decreased ${parseInt(stockQuantity) || 1} ${selectedProductForStock.unit}`)
-                            refetchStock()
-                            refetch()
-                          } catch (error: any) {
-                            toast.error(error.message || 'Failed to decrease stock')
-                          }
-                        }}
-                        disabled={stockOut.isPending || currentQuantity <= 0 || !selectedBranchId}
-                      >
-                        <Minus className="h-4 w-4" />
-                      </Button>
-                      
-                      <Input
-                        type="number"
-                        min="1"
-                        value={stockQuantity}
-                        onChange={(e) => setStockQuantity(e.target.value)}
-                        className="h-10 flex-1 text-center font-semibold"
-                      />
-                      
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="h-10 w-10 p-0"
-                        onClick={async () => {
-                          if (!selectedBranchId || !stockQuantity || parseInt(stockQuantity) <= 0) {
-                            toast.error('Please enter a valid quantity')
-                            return
-                          }
-                          try {
-                            await stockIn.mutateAsync({
-                              branch_id: selectedBranchId,
-                              product_id: selectedProductForStock.id,
-                              quantity: parseInt(stockQuantity),
-                              reason: 'Stock adjustment from products page',
-                            })
-                            toast.success(`Successfully added ${stockQuantity} ${selectedProductForStock.unit}`)
-                            refetchStock()
-                            refetch()
-                          } catch (error: any) {
-                            toast.error(error.message || 'Failed to add stock')
-                          }
-                        }}
-                        disabled={stockIn.isPending || !stockQuantity || !selectedBranchId}
-                      >
-                        <Plus className="h-4 w-4" />
-                      </Button>
-                    </div>
-                    <p className="text-xs text-gray-500 mt-2 text-center">
-                      Click + to add or - to remove stock
+                  {/* Increment/Decrement Amount Input */}
+                  <div className="mt-4">
+                    <label className="text-xs text-gray-500 mb-1 block">Adjustment Amount</label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={stockQuantity}
+                      onChange={(e) => setStockQuantity(e.target.value)}
+                      className="h-9 text-center font-semibold"
+                      placeholder="1"
+                    />
+                    <p className="text-xs text-gray-400 mt-1 text-center">
+                      Amount to add/subtract per click
                     </p>
                   </div>
                 </div>
@@ -943,10 +957,90 @@ export default function ProductsPage() {
                   setSelectedProductForStock(null)
                   setStockQuantity('1')
                   setNewSerialNumber('')
+                  setAdjustedQuantity(0)
                 }}
               >
-                Close
+                Cancel
               </Button>
+              {selectedProductForStock.stock_tracking_type === 'quantity' ? (
+                <Button
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  onClick={async () => {
+                    if (!selectedBranchId) {
+                      toast.error('Please select a branch first')
+                      return
+                    }
+                    
+                    const difference = adjustedQuantity - currentQuantity
+                    
+                    if (difference === 0) {
+                      toast.info('No changes to save')
+                      setQuickAddStockOpen(false)
+                      setSelectedProductForStock(null)
+                      setStockQuantity('1')
+                      setAdjustedQuantity(0)
+                      return
+                    }
+                    
+                    try {
+                      if (difference > 0) {
+                        // Add stock
+                        await stockIn.mutateAsync({
+                          branch_id: selectedBranchId,
+                          product_id: selectedProductForStock.id,
+                          quantity: difference,
+                          reason: 'Stock adjustment from products page',
+                        })
+                        toast.success(`Successfully added ${difference} ${selectedProductForStock.unit}`)
+                      } else {
+                        // Remove stock
+                        if (adjustedQuantity < 0) {
+                          toast.error('Stock cannot be negative')
+                          return
+                        }
+                        await stockOut.mutateAsync({
+                          branch_id: selectedBranchId,
+                          product_id: selectedProductForStock.id,
+                          quantity: Math.abs(difference),
+                          reason: 'Stock adjustment from products page',
+                        })
+                        toast.success(`Successfully removed ${Math.abs(difference)} ${selectedProductForStock.unit}`)
+                      }
+                      refetchStock()
+                      refetch()
+                      setQuickAddStockOpen(false)
+                      setSelectedProductForStock(null)
+                      setStockQuantity('1')
+                      setAdjustedQuantity(0)
+                    } catch (error: any) {
+                      toast.error(error.message || 'Failed to update stock')
+                    }
+                  }}
+                  disabled={stockIn.isPending || stockOut.isPending || !selectedBranchId || adjustedQuantity < 0}
+                >
+                  {stockIn.isPending || stockOut.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    'Save'
+                  )}
+                </Button>
+              ) : (
+                <Button
+                  className="flex-1 bg-blue-600 hover:bg-blue-700"
+                  onClick={() => {
+                    setQuickAddStockOpen(false)
+                    setSelectedProductForStock(null)
+                    setStockQuantity('1')
+                    setNewSerialNumber('')
+                    setAdjustedQuantity(0)
+                  }}
+                >
+                  Done
+                </Button>
+              )}
             </div>
           </div>
         </div>

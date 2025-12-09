@@ -47,12 +47,15 @@ export function useCreateBill() {
         product_name: string
         quantity: number
         unit_price: number
-        gst_rate: number
+        purchase_price?: number
         discount?: number
+        serial_numbers?: string[]
       }>
+      customer_id?: string
       customer_name?: string
       customer_phone?: string
       payment_mode?: 'cash' | 'card' | 'upi' | 'credit'
+      overall_discount?: number
     }) => {
       const response = await fetch('/api/bills', {
         method: 'POST',
@@ -73,7 +76,9 @@ export function useCreateBill() {
     },
     onSuccess: (_, variables) => {
       queryClient.invalidateQueries({ queryKey: ['bills', variables.branch_id] })
+      queryClient.invalidateQueries({ queryKey: ['orders'] })
       queryClient.invalidateQueries({ queryKey: ['stock', variables.branch_id] })
+      queryClient.invalidateQueries({ queryKey: ['dashboard-stats'] })
     },
   })
 }

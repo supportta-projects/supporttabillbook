@@ -51,10 +51,17 @@ export async function GET(request: Request) {
 
 // POST - Create bill
 export async function POST(request: Request) {
+  const startTime = Date.now()
   try {
     const user = await requireAuth()
     const body = await request.json()
     const supabase = await createClient()
+    
+    console.log('[API] POST /api/bills - Request received:', {
+      branch_id: body.branch_id,
+      items_count: body.items?.length || 0,
+      customer_id: body.customer_id || null,
+    })
     
     // Validation
     if (!body.branch_id || !body.items || body.items.length === 0) {
@@ -62,6 +69,22 @@ export async function POST(request: Request) {
         { error: 'branch_id and items are required' },
         { status: 400 }
       )
+    }
+    
+    // Validate items structure
+    for (const item of body.items) {
+      if (!item.product_id || !item.product_name || !item.quantity || !item.unit_price) {
+        return NextResponse.json(
+          { error: 'Each item must have product_id, product_name, quantity, and unit_price' },
+          { status: 400 }
+        )
+      }
+      if (item.quantity <= 0) {
+        return NextResponse.json(
+          { error: `Invalid quantity for ${item.product_name}. Quantity must be greater than 0.` },
+          { status: 400 }
+        )
+      }
     }
     
     // Check permissions
@@ -86,26 +109,72 @@ export async function POST(request: Request) {
       )
     }
     
+    // Get GST settings
+    const { data: settings } = await supabase
+      .from('settings')
+      .select('*')
+      .eq('tenant_id', branch.tenant_id)
+      .single()
+    
+    // Get products for purchase_price and stock validation
+    const productIds = body.items.map((item: any) => item.product_id)
+    const { data: products } = await supabase
+      .from('products')
+      .select('id, name, purchase_price, stock_tracking_type')
+      .in('id', productIds)
+    
+    const productsMap = new Map(products?.map(p => [p.id, p]) || [])
+    
     // Validate stock before creating bill
     for (const item of body.items) {
-      const { data: stock } = await supabase
-        .from('current_stock')
-        .select('quantity')
-        .eq('branch_id', body.branch_id)
-        .eq('product_id', item.product_id)
-        .single()
+      const product = productsMap.get(item.product_id)
       
-      if (!stock || stock.quantity < item.quantity) {
-        const { data: product } = await supabase
-          .from('products')
-          .select('name')
-          .eq('id', item.product_id)
+      // For serial-tracked products, validate serial numbers
+      if (product?.stock_tracking_type === 'serial' && item.serial_numbers && Array.isArray(item.serial_numbers)) {
+        if (item.serial_numbers.length !== item.quantity) {
+          return NextResponse.json(
+            { error: `Quantity mismatch for ${product.name}. Selected ${item.serial_numbers.length} serials but quantity is ${item.quantity}` },
+            { status: 400 }
+          )
+        }
+        
+        // Check if serials are available
+        const { data: serials } = await supabase
+          .from('product_serial_numbers')
+          .select('id, serial_number, status')
+          .eq('product_id', item.product_id)
+          .eq('branch_id', body.branch_id)
+          .in('serial_number', item.serial_numbers)
+        
+        if (!serials || serials.length !== item.serial_numbers.length) {
+          return NextResponse.json(
+            { error: `Some serial numbers are not available for ${product.name}` },
+            { status: 400 }
+          )
+        }
+        
+        const unavailableSerials = serials.filter(s => s.status !== 'available')
+        if (unavailableSerials.length > 0) {
+          return NextResponse.json(
+            { error: `Some serial numbers are already sold: ${unavailableSerials.map(s => s.serial_number).join(', ')}` },
+            { status: 400 }
+          )
+        }
+      } else {
+        // Quantity-based stock validation
+        const { data: stock } = await supabase
+          .from('current_stock')
+          .select('quantity')
+          .eq('branch_id', body.branch_id)
+          .eq('product_id', item.product_id)
           .single()
         
-        return NextResponse.json(
-          { error: `Insufficient stock for ${product?.name || 'product'}. Available: ${stock?.quantity || 0}, Required: ${item.quantity}` },
-          { status: 400 }
-        )
+        if (!stock || stock.quantity < item.quantity) {
+          return NextResponse.json(
+            { error: `Insufficient stock for ${product?.name || 'product'}. Available: ${stock?.quantity || 0}, Required: ${item.quantity}` },
+            { status: 400 }
+          )
+        }
       }
     }
     
@@ -124,23 +193,58 @@ export async function POST(request: Request) {
     const sequence = ((count || 0) + 1).toString().padStart(4, '0')
     const invoiceNumber = `${branch.code}-${dateStr}-${sequence}`
     
-    // Calculate totals
+    // Calculate totals with GST from settings
     let subtotal = 0
     let totalGst = 0
     let totalDiscount = 0
+    let totalProfit = 0
     
     body.items.forEach((item: any) => {
+      const product = productsMap.get(item.product_id)
+      const purchasePrice = product?.purchase_price || 0
+      
       const itemSubtotal = item.quantity * item.unit_price
       const itemDiscount = item.discount || 0
       const itemSubtotalAfterDiscount = itemSubtotal - itemDiscount
-      const itemGst = (itemSubtotalAfterDiscount * (item.gst_rate || 0)) / 100
+      
+      // Calculate GST from settings (not per-item)
+      let itemGst = 0
+      if (settings?.gst_enabled && settings.gst_percentage > 0) {
+        if (settings.gst_type === 'inclusive') {
+          // GST is included in price
+          itemGst = itemSubtotalAfterDiscount * (settings.gst_percentage / (100 + settings.gst_percentage))
+        } else {
+          // GST is exclusive (added on top)
+          itemGst = itemSubtotalAfterDiscount * (settings.gst_percentage / 100)
+        }
+      }
+      
+      // Calculate profit per item
+      const profitPerUnit = item.unit_price - purchasePrice
+      const itemProfit = profitPerUnit * item.quantity
       
       subtotal += itemSubtotal
       totalDiscount += itemDiscount
       totalGst += itemGst
+      totalProfit += itemProfit
     })
     
-    const totalAmount = subtotal - totalDiscount + totalGst
+    // Add overall discount if provided
+    const overallDiscount = parseFloat(body.overall_discount) || 0
+    totalDiscount += overallDiscount
+    
+    // Calculate total amount based on GST type
+    let totalAmount = subtotal - totalDiscount
+    if (settings?.gst_enabled && settings.gst_type === 'exclusive') {
+      totalAmount += totalGst
+    }
+    
+    // Determine initial payment status
+    // If payment_mode is 'credit', set paid_amount = 0, due_amount = total_amount
+    // Otherwise, set paid_amount = total_amount, due_amount = 0
+    const paymentMode = body.payment_mode || 'cash'
+    const initialPaidAmount = paymentMode === 'credit' ? 0 : Math.round(totalAmount * 100) / 100
+    const initialDueAmount = paymentMode === 'credit' ? Math.round(totalAmount * 100) / 100 : 0
     
     // Create bill
     const { data: bill, error: billError } = await supabase
@@ -149,13 +253,17 @@ export async function POST(request: Request) {
         tenant_id: branch.tenant_id,
         branch_id: body.branch_id,
         invoice_number: invoiceNumber,
+        customer_id: body.customer_id || null,
         customer_name: body.customer_name || null,
         customer_phone: body.customer_phone || null,
         subtotal: Math.round(subtotal * 100) / 100,
         gst_amount: Math.round(totalGst * 100) / 100,
         discount: Math.round(totalDiscount * 100) / 100,
         total_amount: Math.round(totalAmount * 100) / 100,
-        payment_mode: body.payment_mode || 'cash',
+        profit_amount: Math.round(totalProfit * 100) / 100,
+        paid_amount: initialPaidAmount,
+        due_amount: initialDueAmount,
+        payment_mode: paymentMode,
         created_by: user.id,
       })
       .select()
@@ -166,11 +274,31 @@ export async function POST(request: Request) {
     // Create bill items and update stock
     const billItems = []
     for (const item of body.items) {
+      const product = productsMap.get(item.product_id)
+      const purchasePrice = product?.purchase_price || 0
+      
       const itemSubtotal = item.quantity * item.unit_price
       const itemDiscount = item.discount || 0
       const itemSubtotalAfterDiscount = itemSubtotal - itemDiscount
-      const itemGst = (itemSubtotalAfterDiscount * (item.gst_rate || 0)) / 100
-      const itemTotal = itemSubtotalAfterDiscount + itemGst
+      
+      // Calculate GST from settings
+      let itemGst = 0
+      if (settings?.gst_enabled && settings.gst_percentage > 0) {
+        if (settings.gst_type === 'inclusive') {
+          itemGst = itemSubtotalAfterDiscount * (settings.gst_percentage / (100 + settings.gst_percentage))
+        } else {
+          itemGst = itemSubtotalAfterDiscount * (settings.gst_percentage / 100)
+        }
+      }
+      
+      let itemTotal = itemSubtotalAfterDiscount
+      if (settings?.gst_enabled && settings.gst_type === 'exclusive') {
+        itemTotal += itemGst
+      }
+      
+      // Calculate profit
+      const profitPerUnit = item.unit_price - purchasePrice
+      const itemProfit = profitPerUnit * item.quantity
       
       const { data: billItem, error: itemError } = await supabase
         .from('bill_items')
@@ -180,10 +308,13 @@ export async function POST(request: Request) {
           product_name: item.product_name,
           quantity: item.quantity,
           unit_price: item.unit_price,
-          gst_rate: item.gst_rate || 0,
+          purchase_price: purchasePrice,
+          gst_rate: settings?.gst_enabled ? settings.gst_percentage : 0,
           gst_amount: Math.round(itemGst * 100) / 100,
           discount: itemDiscount,
+          profit_amount: Math.round(itemProfit * 100) / 100,
           total_amount: Math.round(itemTotal * 100) / 100,
+          serial_numbers: item.serial_numbers ? JSON.stringify(item.serial_numbers) : null,
         })
         .select()
         .single()
@@ -191,16 +322,53 @@ export async function POST(request: Request) {
       if (itemError) throw itemError
       billItems.push(billItem)
       
-      // Stock out
-      const { data: currentStock } = await supabase
-        .from('current_stock')
-        .select('*')
-        .eq('branch_id', body.branch_id)
-        .eq('product_id', item.product_id)
-        .single()
-      
-      if (currentStock) {
-        const newStock = currentStock.quantity - item.quantity
+      // Handle stock update based on tracking type
+      if (product?.stock_tracking_type === 'serial' && item.serial_numbers && Array.isArray(item.serial_numbers)) {
+        // Mark serial numbers as sold
+        await supabase
+          .from('product_serial_numbers')
+          .update({
+            status: 'sold',
+            bill_id: bill.id,
+            sold_at: new Date().toISOString(),
+          })
+          .eq('product_id', item.product_id)
+          .eq('branch_id', body.branch_id)
+          .in('serial_number', item.serial_numbers)
+        
+        // Update current_stock count
+        const { count: availableCount } = await supabase
+          .from('product_serial_numbers')
+          .select('*', { count: 'exact', head: true })
+          .eq('product_id', item.product_id)
+          .eq('branch_id', body.branch_id)
+          .eq('status', 'available')
+        
+        const newStockCount = availableCount || 0
+        
+        // Update or create current_stock record
+        const { data: currentStock } = await supabase
+          .from('current_stock')
+          .select('*')
+          .eq('branch_id', body.branch_id)
+          .eq('product_id', item.product_id)
+          .single()
+        
+        if (currentStock) {
+          await supabase
+            .from('current_stock')
+            .update({ quantity: newStockCount })
+            .eq('id', currentStock.id)
+        } else {
+          await supabase
+            .from('current_stock')
+            .insert({
+              tenant_id: branch.tenant_id,
+              branch_id: body.branch_id,
+              product_id: item.product_id,
+              quantity: newStockCount,
+            })
+        }
         
         // Create ledger entry
         await supabase
@@ -211,32 +379,80 @@ export async function POST(request: Request) {
             product_id: item.product_id,
             transaction_type: 'billing',
             quantity: -item.quantity,
-            previous_stock: currentStock.quantity,
-            current_stock: newStock,
+            previous_stock: (currentStock?.quantity || 0) + item.quantity,
+            current_stock: newStockCount,
             reference_id: bill.id,
             reason: `Billing - Invoice ${invoiceNumber}`,
             created_by: user.id,
           })
-        
-        // Update stock
-        await supabase
+      } else {
+        // Quantity-based stock update
+        const { data: currentStock } = await supabase
           .from('current_stock')
-          .update({ quantity: newStock })
-          .eq('id', currentStock.id)
+          .select('*')
+          .eq('branch_id', body.branch_id)
+          .eq('product_id', item.product_id)
+          .single()
+        
+        if (currentStock) {
+          const newStock = currentStock.quantity - item.quantity
+          
+          // Create ledger entry
+          await supabase
+            .from('stock_ledger')
+            .insert({
+              tenant_id: branch.tenant_id,
+              branch_id: body.branch_id,
+              product_id: item.product_id,
+              transaction_type: 'billing',
+              quantity: -item.quantity,
+              previous_stock: currentStock.quantity,
+              current_stock: newStock,
+              reference_id: bill.id,
+              reason: `Billing - Invoice ${invoiceNumber}`,
+              created_by: user.id,
+            })
+          
+          // Update stock
+          await supabase
+            .from('current_stock')
+            .update({ quantity: newStock })
+            .eq('id', currentStock.id)
+        }
       }
     }
     
-    return NextResponse.json({ bill, items: billItems }, { status: 201 })
+    const duration = Date.now() - startTime
+    console.log(`[PERF] POST /api/bills: ${duration}ms`)
+    
+    return NextResponse.json({ bill, items: billItems }, { 
+      status: 201,
+      headers: {
+        'X-Response-Time': `${duration}ms`,
+        'Cache-Control': 'no-store, no-cache, must-revalidate',
+      }
+    })
   } catch (error: any) {
-    if (error.message?.includes('redirect')) {
+    const duration = Date.now() - startTime
+    console.error('[API] POST /api/bills error:', error)
+    
+    if (error.message?.includes('redirect') || error?.message?.includes('NEXT_REDIRECT')) {
       return NextResponse.json(
-        { error: 'Unauthorized' },
+        { error: 'Unauthorized. Please log in again.' },
         { status: 401 }
       )
     }
+    
+    // Return more detailed error messages
+    const errorMessage = error.message || error.error || 'Failed to create bill'
     return NextResponse.json(
-      { error: error.message || 'Failed to create bill' },
-      { status: 500 }
+      { error: errorMessage },
+      { 
+        status: error.status || 500,
+        headers: {
+          'X-Response-Time': `${duration}ms`,
+        }
+      }
     )
   }
 }

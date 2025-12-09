@@ -147,6 +147,13 @@ export async function POST(request: Request) {
       )
     }
     
+    // When creating a new branch, set all products inactive until stock is added
+    // This ensures products are only active when they have stock in the branch
+    await supabase
+      .from('products')
+      .update({ is_active: false })
+      .eq('tenant_id', body.tenant_id)
+    
     // Create branch admin if requested
     let adminUser = null
     if (shouldCreateAdmin && body.admin_name && body.admin_email && body.admin_password) {
